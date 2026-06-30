@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str
     allowed_telegram_user_ids: list[int] = []
+    admin_telegram_user_ids: list[int] = []
     domonap_phone: str = ""
     storage_path: str = "data/storage.db"
     log_level: str = "INFO"

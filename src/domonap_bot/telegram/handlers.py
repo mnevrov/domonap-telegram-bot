@@ -21,6 +21,16 @@ logger = logging.getLogger(__name__)
 _COOLDOWN_SECONDS = 5
 
 
+def _mask_phone(phone: str) -> str:
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) < 4:
+        return phone
+    masked = digits[:3] + "***" + digits[-2:]
+    if phone.startswith("+"):
+        return f"+{masked}"
+    return masked
+
+
 class CooldownManager:
     def __init__(self, timeout: float = _COOLDOWN_SECONDS) -> None:
         self._cooldowns: dict[tuple[int, str], float] = {}
@@ -61,6 +71,7 @@ def register_handlers(
     router: Router,
     client: DomonapClient,
     access: AccessControl,
+    admin_access: AccessControl,
 ) -> None:
     cooldown = CooldownManager()
 
@@ -80,13 +91,23 @@ def register_handlers(
     @router.message(Command("start"))
     @access.require_access
     async def cmd_start(message: Message) -> None:
-        await message.answer(
-            "🏠 Domonap Bot\n\n"
-            "Commands:\n"
-            "/status — connection & auth status\n"
-            "/doors — list available doors\n"
-            "/open — choose a door to open"
-        )
+        user_id = message.from_user.id if message.from_user else 0
+        lines = [
+            "🏠 Domonap Bot\n",
+            "Commands:",
+            "/status — connection & auth status",
+            "/doors — list available doors",
+            "/open — choose a door to open",
+        ]
+        if admin_access.is_allowed(user_id):
+            lines.extend([
+                "",
+                "Admin commands:",
+                "/auth — request SMS code for Domonap",
+                "/code <code> — confirm SMS code",
+                "/logout — clear saved tokens",
+            ])
+        await message.answer("\n".join(lines))
 
     @router.message(Command("status"))
     @access.require_access
@@ -175,6 +196,68 @@ def register_handlers(
             "Select a door to open:",
             reply_markup=door_selection_keyboard(doors),
         )
+
+    @router.message(Command("auth"))
+    @admin_access.require_access
+    async def cmd_auth(message: Message) -> None:
+        phone = client.phone
+        if not phone:
+            await message.answer("No phone number configured. Set DOMONAP_PHONE in .env")
+            return
+
+        try:
+            success = await client.login(phone)
+        except NetworkError:
+            await message.answer("Network unavailable. Please try again later.")
+            return
+        except DomonapError:
+            await message.answer("Failed to request SMS code. Try again later.")
+            return
+
+        if success:
+            masked = _mask_phone(phone)
+            await message.answer(
+                f"SMS code sent to {masked}\n"
+                f"Use /code <code> to complete authorization."
+            )
+        else:
+            await message.answer("Failed to request SMS code. Check phone number.")
+
+    @router.message(Command("code"))
+    @admin_access.require_access
+    async def cmd_code(message: Message) -> None:
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await message.answer("Usage: /code <sms_code>")
+            return
+
+        code = parts[1].strip()
+
+        try:
+            success = await client.confirm_login(code)
+        except NetworkError:
+            await message.answer("Network unavailable. Please try again later.")
+            return
+        except DomonapError:
+            await message.answer("Authorization failed. Check the code and try again.")
+            return
+
+        if success:
+            await message.answer("✅ Successfully authorized with Domonap!")
+        else:
+            await message.answer("❌ Invalid code or session expired. Run /auth again.")
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+    @router.message(Command("logout"))
+    @admin_access.require_access
+    async def cmd_logout(message: Message) -> None:
+        await client.token_storage.clear()
+        client.mark_session_expired("user logout")
+        await message.answer("✅ Tokens cleared. Logged out.")
 
     @router.callback_query(F.data.startswith("open:"))
     @access.require_access

@@ -15,7 +15,11 @@ def build_bot(
     router = Router()
 
     access = AccessControl(settings.allowed_telegram_user_ids)
-    register_handlers(router, client, access)
+    admin_access = AccessControl(
+        settings.admin_telegram_user_ids,
+        default_allow=False,
+    )
+    register_handlers(router, client, access, admin_access)
 
     dp.include_router(router)
     return bot, dp

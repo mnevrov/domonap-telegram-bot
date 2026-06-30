@@ -9,7 +9,11 @@ from domonap_bot.domonap.exceptions import (
     TokenExpiredError,
 )
 from domonap_bot.telegram.access import AccessControl
-from domonap_bot.telegram.handlers import CooldownManager, _describe_error
+from domonap_bot.telegram.handlers import (
+    CooldownManager,
+    _describe_error,
+    _mask_phone,
+)
 
 
 def _make_message(user_id: int) -> MagicMock:
@@ -100,7 +104,7 @@ class TestDescribeError:
         assert "API error" in msg
 
     def test_unknown_subclass(self) -> None:
-        class MyError(DomonapError):  # type: ignore[misc]
+        class MyError(DomonapError):
             pass
 
         msg = _describe_error(MyError("custom"))
@@ -167,3 +171,57 @@ class TestCooldownManager:
         cleared = cm.clear_expired()
         assert cleared == 0
         assert cm.is_ready(1, "door_1") is False
+
+
+class TestAdminAccess:
+    def test_empty_admin_list_denies_all(self) -> None:
+        ac = AccessControl([], default_allow=False)
+        assert ac.is_allowed(1) is False
+        assert ac.is_allowed(999) is False
+
+    def test_admin_in_list_allowed(self) -> None:
+        ac = AccessControl([42], default_allow=False)
+        assert ac.is_allowed(42) is True
+        assert ac.is_allowed(1) is False
+
+    def test_admin_default_allow_param(self) -> None:
+        ac_regular = AccessControl([])
+        assert ac_regular.is_allowed(1) is True
+
+        ac_admin = AccessControl([], default_allow=False)
+        assert ac_admin.is_allowed(1) is False
+
+    async def test_admin_require_access_blocks_non_admin(self) -> None:
+        ac = AccessControl([], default_allow=False)
+
+        @ac.require_access
+        async def handler(event: Message) -> str:
+            return "passed"
+
+        msg = _make_message(user_id=99)
+        result = await handler(msg)
+        assert result is None
+        msg.answer.assert_awaited_once_with("Access denied.")
+
+
+class TestMaskPhone:
+    def test_full_russian_number(self) -> None:
+        assert _mask_phone("+79991234567") == "+799***67"
+
+    def test_without_plus(self) -> None:
+        assert _mask_phone("89991234567") == "899***67"
+
+    def test_short_number(self) -> None:
+        assert _mask_phone("123") == "123"
+
+    def test_empty_string(self) -> None:
+        assert _mask_phone("") == ""
+
+    def test_international_number(self) -> None:
+        assert _mask_phone("+12025551234") == "+120***34"
+
+    def test_only_digits_short(self) -> None:
+        assert _mask_phone("12") == "12"
+
+
+
