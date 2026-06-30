@@ -3,8 +3,7 @@ from typing import Any
 
 import httpx
 
-from domonap_bot.domonap.exceptions import AuthenticationError, NetworkError
-from domonap_bot.domonap.models import LoginCodeResponse
+from domonap_bot.domonap.exceptions import ApiError, AuthenticationError, NetworkError
 
 logger = logging.getLogger(__name__)
 
@@ -12,38 +11,62 @@ logger = logging.getLogger(__name__)
 class DomonapAuth:
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self._http = http_client
-        self._session_id: str | None = None
 
-    async def request_code(self, phone: str) -> LoginCodeResponse:
+    async def request_code(self, country_code: str, phone_number: str) -> bool:
+        payload = {
+            "phoneNumber": {
+                "countryCode": int(country_code),
+                "number": int(phone_number),
+            },
+        }
         try:
             resp = await self._http.post(
-                "/api/v2/auth/request-code",
-                json={"phone": phone},
+                "/sso-api/Authorization/Authorize",
+                json=payload,
             )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            self._session_id = str(data["session_id"])
-            return LoginCodeResponse(
-                session_id=str(data["session_id"]),
-                retry_after=int(data.get("retry_after", 30)),
-            )
-        except AuthenticationError:
-            raise
-        except Exception as exc:
-            raise NetworkError("Failed to request auth code") from exc
+        except httpx.TimeoutException as exc:
+            raise NetworkError("Request timed out") from exc
+        except httpx.ConnectError as exc:
+            raise NetworkError("Connection failed") from exc
+        except httpx.HTTPError as exc:
+            raise NetworkError(f"HTTP error: {exc}") from exc
 
-    async def confirm_code(self, code: str) -> str:
-        if not self._session_id:
-            raise AuthenticationError("No active session. Request code first.")
+        if resp.is_success:
+            return True
+
+        body = resp.text[:500]
+        raise ApiError(f"SMS request failed ({resp.status_code}): {body}")
+
+    async def confirm_code(
+        self,
+        country_code: str,
+        phone_number: str,
+        confirm_code: str,
+        device_token: str,
+    ) -> dict[str, Any]:
+        payload = {
+            "phoneNumber": {
+                "countryCode": int(country_code),
+                "number": int(phone_number),
+            },
+            "confirmCode": confirm_code,
+            "deviceToken": device_token,
+        }
         try:
             resp = await self._http.post(
-                "/api/v2/auth/confirm-code",
-                json={"session_id": self._session_id, "code": code},
+                "/sso-api/Authorization/ConfirmAuthorization",
+                json=payload,
             )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            return str(data["token"])
-        except AuthenticationError:
-            raise
-        except Exception as exc:
-            raise NetworkError("Failed to confirm auth code") from exc
+        except httpx.TimeoutException as exc:
+            raise NetworkError("Request timed out") from exc
+        except httpx.ConnectError as exc:
+            raise NetworkError("Connection failed") from exc
+        except httpx.HTTPError as exc:
+            raise NetworkError(f"HTTP error: {exc}") from exc
+
+        if not resp.is_success:
+            body = resp.text[:500]
+            raise AuthenticationError(f"Code confirmation failed ({resp.status_code}): {body}")
+
+        data: dict[str, Any] = resp.json()
+        return data

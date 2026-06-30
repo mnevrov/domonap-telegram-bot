@@ -1,21 +1,81 @@
+import asyncio
 import logging
-from typing import Any, cast
+from datetime import datetime, timezone
+from secrets import token_bytes
+from typing import Any, Callable
+from uuid import UUID
 
 import httpx
 
 from domonap_bot.domonap.auth import DomonapAuth
 from domonap_bot.domonap.exceptions import (
     ApiError,
-    DomonapError,
+    AuthenticationError,
     NetworkError,
+    SessionExpiredError,
     TokenExpiredError,
 )
-from domonap_bot.domonap.models import AuthSession, CallLogEntry, Door
+from domonap_bot.domonap.models import (
+    AuthSession,
+    CallLogEntry,
+    DoorKey,
+    PagedResponse,
+    TokenData,
+)
 from domonap_bot.storage.tokens import TokenStorage
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.domonap.ru"
+DEFAULT_USER_AGENT = "okhttp/5.3.2"
+DEFAULT_DEVICE_PLATFORM = "Android"
+DEFAULT_DOM_APP = "mobile"
+_ANDROID_GUID_RETRY_LIMIT = 8
+_generated_android_guids: set[str] = set()
+
+
+def _generate_android_guid() -> str:
+    random_bytes = bytearray(token_bytes(16))
+    random_bytes[6] = (random_bytes[6] & 0x0F) | 0x40
+    random_bytes[8] = (random_bytes[8] & 0x3F) | 0x80
+    return str(UUID(bytes=bytes(random_bytes)))
+
+
+def _generate_unique_android_guid() -> str:
+    for _ in range(_ANDROID_GUID_RETRY_LIMIT):
+        guid = _generate_android_guid()
+        if guid not in _generated_android_guids:
+            _generated_android_guids.add(guid)
+            return guid
+    guid = _generate_android_guid()
+    _generated_android_guids.add(guid)
+    return guid
+
+
+def _with_suffix(value: str) -> str:
+    return value if value.endswith(";") else f"{value};"
+
+
+def _phone_digits(phone: str) -> tuple[str, str]:
+    digits = "".join(c for c in phone if c.isdigit())
+    if digits.startswith("7") or digits.startswith("8"):
+        digits = digits[1:]
+    return "7", digits
+
+
+def _parse_dt(val: str) -> datetime | None:
+    fmts = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
+    for fmt in fmts:
+        try:
+            return datetime.strptime(val, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(val.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    logger.warning("Cannot parse datetime: %s", val)
+    return None
 
 
 class DomonapClient:
@@ -23,72 +83,47 @@ class DomonapClient:
         self,
         token_storage: TokenStorage,
         phone: str = "",
+        device_token: str | None = None,
+        instance_id: str | None = None,
     ) -> None:
         self._token_storage = token_storage
         self._phone = phone
-        self._client = httpx.AsyncClient(
+
+        self._device_token = device_token or _generate_unique_android_guid()
+        self._instance_id = instance_id or _generate_unique_android_guid()
+
+        self.access_token: str | None = None
+        self.refresh_token: str | None = None
+        self.refresh_expiration_date: str | None = None
+
+        self._refresh_token_invalid: bool = False
+        self._refresh_lock = asyncio.Lock()
+        self.token_update_callback: Callable[[AuthSession], None] | None = None
+
+        headers: dict[str, str] = {
+            "User-Agent": DEFAULT_USER_AGENT,
+            "dom-app": _with_suffix(DEFAULT_DOM_APP),
+            "dom-platform": _with_suffix(DEFAULT_DEVICE_PLATFORM),
+            "instanceId": _with_suffix(self._instance_id),
+        }
+
+        self._http = httpx.AsyncClient(
             base_url=BASE_URL,
-            timeout=httpx.Timeout(15.0),
+            timeout=httpx.Timeout(30.0),
+            headers=headers,
         )
-        self.auth = DomonapAuth(self._client)
+        self.auth = DomonapAuth(self._http)
+        self._closed = False
 
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        token = await self._token_storage.load()
-        headers = kwargs.pop("headers", {})
-        if token:
-            headers.setdefault("Authorization", f"Bearer {token}")
+    async def close(self) -> None:
+        self._closed = True
+        await self._http.aclose()
 
-        try:
-            resp = await self._client.request(method, path, headers=headers, **kwargs)
-        except httpx.TimeoutException as exc:
-            raise NetworkError("Request timed out") from exc
-        except httpx.ConnectError as exc:
-            raise NetworkError("Connection failed") from exc
-        except httpx.HTTPError as exc:
-            raise NetworkError(f"HTTP error: {exc}") from exc
+    async def __aenter__(self) -> "DomonapClient":
+        return self
 
-        if resp.status_code == 401:
-            refreshed = await self._try_refresh()
-            if refreshed:
-                return await self._request(method, path, **kwargs)
-            raise TokenExpiredError("Token expired and could not be refreshed")
-
-        if not resp.is_success:
-            raise ApiError(
-                f"API returned {resp.status_code}: {resp.text}"
-            )
-
-        try:
-            return cast("dict[str, Any]", resp.json())
-        except Exception as exc:
-            raise ApiError("Invalid JSON response") from exc
-
-    async def _try_refresh(self) -> bool:
-        refresh_token = await self._token_storage.load_refresh()
-        if not refresh_token:
-            return False
-        try:
-            resp = await self._client.post(
-                "/api/v2/auth/refresh",
-                json={"refresh_token": refresh_token},
-            )
-            if resp.is_success:
-                data = resp.json()
-                session = AuthSession(
-                    token=data["token"],
-                    refresh_token=data.get("refresh_token"),
-                    phone=self._phone,
-                )
-                await self._token_storage.save(session)
-                return True
-        except Exception:
-            logger.warning("Token refresh failed", exc_info=True)
-        return False
+    async def __aexit__(self, *args: object) -> None:
+        await self.close()
 
     @property
     def token_storage(self) -> TokenStorage:
@@ -98,49 +133,449 @@ class DomonapClient:
     def phone(self) -> str:
         return self._phone
 
+    @property
+    def device_token(self) -> str:
+        return self._device_token
+
+    @property
+    def instance_id(self) -> str:
+        return self._instance_id
+
+    def set_tokens(
+        self,
+        access_token: str | None,
+        refresh_token: str | None,
+        refresh_expiration_date: str | None,
+    ) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.refresh_expiration_date = refresh_expiration_date
+        if refresh_token:
+            self._refresh_token_invalid = False
+
+    def _now_utc(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _refresh_expired(self) -> bool:
+        if not self.refresh_token or not self.refresh_expiration_date:
+            return False
+        exp = _parse_dt(self.refresh_expiration_date)
+        return bool(exp and self._now_utc() >= exp)
+
+    def has_valid_refresh_token(self) -> bool:
+        if self._refresh_token_invalid:
+            return False
+        if self._refresh_expired():
+            return False
+        return bool(self.refresh_token)
+
+    def mark_session_expired(self, reason: str) -> None:
+        self._invalidate_refresh(reason)
+
+    def _invalidate_refresh(self, reason: str) -> None:
+        if self._refresh_token_invalid and not self.refresh_token and not self.access_token:
+            return
+        logger.warning("Domonap session expired: %s", reason)
+        self._refresh_token_invalid = True
+        self.access_token = None
+        self.refresh_token = None
+        self.refresh_expiration_date = None
+        if self.token_update_callback:
+            self.token_update_callback(AuthSession(phone=self._phone))
+
+    def _ensure_refresh_is_available(self) -> bool:
+        if self._refresh_token_invalid:
+            return False
+        if self._refresh_expired():
+            self._invalidate_refresh("refresh token expired")
+            return False
+        return bool(self.refresh_token)
+
+    async def _ensure_alive(self) -> None:
+        if self._refresh_expired():
+            self._invalidate_refresh("refresh token expired")
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        need_auth: bool = False,
+        expect_text: bool = False,
+        retry_on_401: bool = True,
+    ) -> dict[str, Any] | str:
+        if self._refresh_token_invalid and need_auth:
+            raise SessionExpiredError("Session expired")
+
+        if need_auth:
+            if not self.access_token:
+                raise TokenExpiredError("No access token available")
+            await self._ensure_alive()
+            if not self.access_token:
+                raise SessionExpiredError("Session expired")
+
+        url = f"{BASE_URL}{path}"
+        first_try_access_token = self.access_token
+
+        async def _do() -> httpx.Response:
+            headers: dict[str, str] = {}
+            if payload is not None:
+                headers["Content-Type"] = "application/json; charset=UTF-8"
+            if need_auth and self.access_token:
+                headers["Authorization"] = f"Bearer {self.access_token}"
+            return await self._http.request(
+                method, url, json=payload, headers=headers,
+            )
+
+        resp = await _do()
+
+        if (
+            resp.status_code == 401
+            and retry_on_401
+            and bool(self.refresh_token)
+        ):
+            if await self._try_refresh(first_try_access_token):
+                resp = await _do()
+
+        if resp.is_success:
+            if expect_text:
+                return resp.text
+            data: dict[str, Any] = resp.json()
+            return data
+
+        body = resp.text[:2000]
+        if resp.status_code in (400, 401, 403):
+            self._invalidate_refresh(f"token rejected with HTTP {resp.status_code}")
+            raise SessionExpiredError(
+                f"HTTP {resp.status_code}: {body}"
+            )
+
+        raise ApiError(f"HTTP {resp.status_code}: {body}")
+
+    async def _try_refresh(
+        self, first_try_access_token: str | None
+    ) -> bool:
+        if not self._ensure_refresh_is_available():
+            return False
+        async with self._refresh_lock:
+            if (
+                first_try_access_token
+                and self.access_token
+                and self.access_token != first_try_access_token
+            ):
+                return True
+            if not self._ensure_refresh_is_available():
+                return False
+            try:
+                await self._perform_token_refresh()
+                return True
+            except (ApiError, NetworkError, SessionExpiredError):
+                return False
+
+    async def _perform_token_refresh(self) -> None:
+        if not self.refresh_token:
+            raise SessionExpiredError("No refresh token")
+        data = await self._request(
+            "POST",
+            "/sso-api/Authorization/RefreshToken",
+            payload={"refreshToken": self.refresh_token},
+            need_auth=False,
+            retry_on_401=False,
+        )
+        if isinstance(data, str):
+            raise ApiError(f"Unexpected text response on refresh: {data}")
+
+        self.set_tokens(
+            data["accessToken"],
+            data["refreshToken"],
+            data["refreshExpirationDate"],
+        )
+        session = AuthSession(
+            access_token=data["accessToken"],
+            refresh_token=data["refreshToken"],
+            refresh_expiration_date=data["refreshExpirationDate"],
+            phone=self._phone,
+            device_token=self._device_token,
+            instance_id=self._instance_id,
+        )
+        await self._token_storage.save(session)
+        if self.token_update_callback:
+            self.token_update_callback(session)
+
+    # --- Auth helpers ---
+
     async def login(self, phone: str) -> bool:
         try:
-            await self.auth.request_code(phone)
+            country_code, number = _phone_digits(phone)
+            await self.auth.request_code(country_code, number)
             return True
-        except DomonapError:
+        except (ApiError, NetworkError):
             return False
 
     async def confirm_login(self, code: str) -> bool:
         try:
-            token = await self.auth.confirm_code(code)
+            token_data = await self._perform_confirm(code)
             session = AuthSession(
-                token=token,
+                access_token=token_data.access_token,
+                refresh_token=token_data.refresh_token,
+                refresh_expiration_date=token_data.refresh_expiration_date,
                 phone=self._phone,
+                device_token=self._device_token,
+                instance_id=self._instance_id,
             )
             await self._token_storage.save(session)
+            if self.token_update_callback:
+                self.token_update_callback(session)
             return True
-        except DomonapError:
+        except (ApiError, AuthenticationError, NetworkError):
             return False
 
-    async def refresh_token(self) -> bool:
-        return await self._try_refresh()
+    async def _perform_confirm(self, code: str) -> TokenData:
+        country_code, phone_digits = _phone_digits(self._phone)
+        raw = await self.auth.confirm_code(
+            country_code=country_code,
+            phone_number=phone_digits,
+            confirm_code=code,
+            device_token=self._device_token,
+        )
+        ct = raw.get("completeToken", raw)
+        token_data = TokenData(
+            access_token=ct["accessToken"],
+            refresh_token=ct["refreshToken"],
+            refresh_expiration_date=ct["refreshExpirationDate"],
+        )
+        self.set_tokens(
+            token_data.access_token,
+            token_data.refresh_token,
+            token_data.refresh_expiration_date,
+        )
+        await self._update_device_token()
+        return token_data
 
-    async def get_doors(self) -> list[Door]:
-        data = await self._request("GET", "/api/v2/doors")
-        return [Door(**item) for item in data.get("doors", [])]
+    async def refresh_session(self) -> bool:
+        try:
+            await self._perform_token_refresh()
+            return True
+        except (ApiError, NetworkError, SessionExpiredError, TokenExpiredError):
+            return False
 
-    async def open_door(self, door_id: str) -> bool:
+    # --- Device token ---
+
+    async def _update_device_token(self) -> None:
+        await self._request(
+            "POST",
+            "/sso-api/Authorization/UpdateDeviceToken",
+            payload={
+                "deviceToken": self._device_token,
+                "platform": DEFAULT_DEVICE_PLATFORM,
+            },
+            need_auth=True,
+            expect_text=True,
+            retry_on_401=True,
+        )
+
+    # --- User ---
+
+    async def get_user(self) -> dict[str, Any]:
+        data = await self._request("POST", "/sso-api/User/GetUser", need_auth=True)
+        if isinstance(data, str):
+            raise ApiError(f"Unexpected text response: {data}")
+        return data
+
+    async def get_username(self) -> str | None:
+        user = await self.get_user()
+        profile = user.get("userProfile") or {}
+        return profile.get("username")
+
+    # --- Keys / Doors ---
+
+    async def get_paged_keys(
+        self,
+        per_page: int = 100,
+        current_page: int = 1,
+        keys_type: str = "Main",
+    ) -> PagedResponse:
+        payload = {
+            "currentPage": current_page,
+            "perPage": per_page,
+            "keysType": keys_type,
+            "search": None,
+        }
         data = await self._request(
             "POST",
-            f"/api/v2/doors/{door_id}/open",
+            "/client-api/Key/GetPagedKeysByKeysType",
+            payload=payload,
+            need_auth=True,
         )
-        return bool(data.get("success", False))
+        if isinstance(data, str):
+            raise ApiError(f"Unexpected text response: {data}")
+        return PagedResponse(
+            results=data.get("results", []),
+            current_page=data.get("currentPage", 1),
+            per_page=data.get("perPage", 100),
+            total=data.get("total", 0),
+        )
 
-    async def get_call_logs(self) -> list[CallLogEntry]:
-        data = await self._request("GET", "/api/v2/calls")
-        return [CallLogEntry(**item) for item in data.get("calls", [])]
+    async def get_doors(self) -> list[DoorKey]:
+        paged = await self.get_paged_keys()
+        result: list[DoorKey] = []
+        for item in paged.results:
+            key = DoorKey.model_validate(item)
+            key.raw = item
+            result.append(key)
+        return result
 
-    async def get_video_url(self, door_id: str) -> str | None:
+    async def get_user_key(self, key_id: str) -> DoorKey | None:
+        payload = {"keyId": key_id}
         data = await self._request(
-            "GET",
-            f"/api/v2/doors/{door_id}/video",
+            "POST",
+            "/client-api/Key/GetUserKey",
+            payload=payload,
+            need_auth=True,
         )
-        return data.get("url")
+        if isinstance(data, str) or "error" in data:
+            return None
+        key = DoorKey.model_validate(data)
+        key.raw = data
+        return key
 
-    async def close(self) -> None:
-        await self._client.aclose()
+    # --- Door control ---
+
+    async def open_door(self, door_id: str) -> bool:
+        payload = {"doorId": door_id}
+        data = await self._request(
+            "POST",
+            "/client-api/Device/OpenRelayByDoorId",
+            payload=payload,
+            need_auth=True,
+            expect_text=True,
+        )
+        return isinstance(data, str)
+
+    async def open_door_by_key(self, key_id: str) -> bool:
+        payload = {"keyId": key_id}
+        data = await self._request(
+            "POST",
+            "/client-api/Device/OpenRelayByKeyId",
+            payload=payload,
+            need_auth=True,
+            expect_text=True,
+        )
+        return isinstance(data, str)
+
+    # --- Call logs ---
+
+    async def get_call_logs(
+        self,
+        per_page: int = 20,
+        current_page: int = 1,
+        missed_calls: bool = False,
+    ) -> list[CallLogEntry]:
+        payload = {
+            "currentPage": current_page,
+            "perPage": per_page,
+            "missedCalls": missed_calls,
+        }
+        data = await self._request(
+            "POST",
+            "/client-api/CallLog/GetCallLogs",
+            payload=payload,
+            need_auth=True,
+        )
+        if isinstance(data, str):
+            raise ApiError(f"Unexpected text response: {data}")
+        results = data.get("results", [])
+        entries: list[CallLogEntry] = []
+        for item in results:
+            entry = CallLogEntry.model_validate(item)
+            entry.raw = item
+            entries.append(entry)
+        return entries
+
+    # --- Calls ---
+
+    async def answer_call(self, call_id: str) -> bool:
+        payload = {"callId": call_id}
+        data = await self._request(
+            "POST",
+            "/communication-api/Call/NotifyCallAnswered",
+            payload=payload,
+            need_auth=True,
+            expect_text=True,
+        )
+        return isinstance(data, str)
+
+    async def end_call(self, call_id: str) -> bool:
+        payload = {"callId": call_id}
+        data = await self._request(
+            "POST",
+            "/communication-api/Call/NotifyCallEnded",
+            payload=payload,
+            need_auth=True,
+            expect_text=True,
+        )
+        return isinstance(data, str)
+
+    # --- Notification hub ---
+
+    async def get_notify_token(self) -> str | None:
+        data = await self._request(
+            "POST",
+            "/notificationHub/negotiate?negotiateVersion=1",
+            need_auth=True,
+        )
+        if isinstance(data, str):
+            return None
+        return data.get("connectionToken")
+
+    # --- Fetch external resource (for media) ---
+
+    async def fetch_external_bytes(
+        self,
+        url: str,
+        *,
+        authorized: bool = True,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if authorized:
+            if not self.access_token:
+                return {"ok": False, "error": "No access token available", "body": b""}
+            await self._ensure_alive()
+            if not self.access_token:
+                return {"ok": False, "error": "Session expired", "body": b""}
+
+        request_headers = dict(extra_headers or {})
+        if authorized and self.access_token:
+            request_headers["Authorization"] = f"Bearer {self.access_token}"
+
+        first_try_access_token = self.access_token
+
+        try:
+            resp = await self._http.get(url, headers=request_headers)
+            if (
+                resp.status_code == 401
+                and authorized
+                and bool(self.refresh_token)
+            ):
+                if await self._try_refresh(first_try_access_token):
+                    if self.access_token:
+                        request_headers["Authorization"] = f"Bearer {self.access_token}"
+                    resp = await self._http.get(url, headers=request_headers)
+
+            body = resp.read()
+            if resp.is_success:
+                return {
+                    "ok": True,
+                    "status": resp.status_code,
+                    "body": body,
+                    "content_type": resp.headers.get("Content-Type"),
+                }
+            return {
+                "ok": False,
+                "error": f"HTTP {resp.status_code}",
+                "status": resp.status_code,
+                "body": body[:2000],
+            }
+        except httpx.HTTPError as exc:
+            return {"ok": False, "error": str(exc), "body": b""}

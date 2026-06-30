@@ -16,3 +16,7 @@ class ApiError(DomonapError):
 
 class TokenExpiredError(AuthenticationError):
     """Raised when the stored token has expired and refresh failed."""
+
+
+class SessionExpiredError(AuthenticationError):
+    """Raised when the refresh token itself is expired or invalid."""

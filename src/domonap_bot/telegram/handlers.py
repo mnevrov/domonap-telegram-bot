@@ -55,8 +55,7 @@ def register_handlers(
             return
 
         text = "Available doors:\n" + "\n".join(
-            f"🚪 {d.name}" + (f" ({d.building})" if d.building else "")
-            for d in doors
+            f"🚪 {d.name}" for d in doors
         )
         kb = door_selection_keyboard(doors)
         await message.answer(text, reply_markup=kb)
