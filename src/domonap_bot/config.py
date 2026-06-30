@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     domonap_phone: str = ""
     storage_path: str = "data/storage.db"
     log_level: str = "INFO"
+    call_watcher_enabled: bool = True
 
     @property
     def storage_path_resolved(self) -> Path:

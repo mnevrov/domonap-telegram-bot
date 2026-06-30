@@ -1,0 +1,198 @@
+import asyncio
+import logging
+from datetime import datetime
+from typing import Any
+
+from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from domonap_bot.config import Settings
+from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
+
+logger = logging.getLogger(__name__)
+
+_MAX_SEEN_IDS = 1000
+_POLL_INTERVAL = 5.0
+
+
+class CallWatcher:
+    def __init__(
+        self,
+        client: DomonapClient,
+        bot: Bot,
+        settings: Settings,
+    ) -> None:
+        self._client = client
+        self._bot = bot
+        self._settings = settings
+        self._task: asyncio.Task[Any] | None = None
+        self._seen_ids: set[str] = set()
+        self._door_map: dict[str, DoorKey] = {}
+
+    async def start(self) -> None:
+        if not self._settings.call_watcher_enabled:
+            logger.info("CallWatcher disabled by config")
+            return
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    async def _run(self) -> None:
+        await self._load_door_map()
+
+        try:
+            async for event in self._client.listen_events():
+                await self._handle_payload(event)
+        except NotImplementedError:
+            logger.info("listen_events not available, using polling")
+        except Exception as exc:
+            logger.warning("listen_events failed (%s), using polling", exc)
+
+        await self._prepopulate_seen()
+        await self._poll_loop()
+
+    async def _prepopulate_seen(self) -> None:
+        try:
+            logs = await self._client.get_call_logs(per_page=20, missed_calls=False)
+            for entry in logs:
+                self._seen_ids.add(entry.call_id)
+            logger.info("Pre-populated %s seen call IDs from call logs", len(logs))
+        except Exception as exc:
+            logger.warning("Failed to pre-populate seen IDs: %s", exc)
+
+    async def _poll_loop(self) -> None:
+        while True:
+            try:
+                logs = await self._client.get_call_logs(per_page=10, missed_calls=False)
+                for entry in logs:
+                    await self._handle_entry(entry)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("Call log poll error: %s", exc)
+
+            try:
+                await asyncio.sleep(_POLL_INTERVAL)
+            except asyncio.CancelledError:
+                return
+
+    async def _load_door_map(self) -> None:
+        try:
+            doors = await self._client.get_doors()
+            for d in doors:
+                self._door_map[d.door_id] = d
+                self._door_map[d.id] = d
+        except Exception as exc:
+            logger.warning("Failed to load door map: %s", exc)
+
+    async def _handle_payload(self, payload: IncomingCallPayload) -> None:
+        if payload.call_id in self._seen_ids:
+            return
+        self._add_seen(payload.call_id)
+
+        door = self._door_map.get(payload.door_id) if payload.door_id else None
+
+        video_url = payload.video_preview
+        if not video_url and door:
+            video_url = door.http_video_url or door.webrtc_video_url
+
+        await self._send_notification(
+            user_ids=self._settings.allowed_telegram_user_ids,
+            text=self._build_message_text(
+                door=door,
+                address=payload.address or payload.title,
+            ),
+            photo_url=payload.photo_url or payload.video_preview,
+            door_id=payload.door_id or (door.door_id if door else None),
+            video_url=video_url,
+        )
+
+    async def _handle_entry(self, entry: CallLogEntry) -> None:
+        if entry.call_id in self._seen_ids:
+            return
+        self._add_seen(entry.call_id)
+
+        door = self._door_map.get(entry.door_id) if entry.door_id else None
+        video_url = door.http_video_url or door.webrtc_video_url if door else None
+
+        await self._send_notification(
+            user_ids=self._settings.allowed_telegram_user_ids,
+            text=self._build_message_text(door=door, call_time=entry.call_time),
+            photo_url=entry.photo_url,
+            door_id=entry.door_id or (door.door_id if door else None),
+            video_url=video_url,
+        )
+
+    def _add_seen(self, call_id: str) -> None:
+        self._seen_ids.add(call_id)
+        if len(self._seen_ids) > _MAX_SEEN_IDS:
+            self._seen_ids = set(list(self._seen_ids)[-_MAX_SEEN_IDS // 2 :])
+
+    @staticmethod
+    def _build_message_text(
+        door: DoorKey | None = None,
+        address: str | None = None,
+        call_time: datetime | None = None,
+    ) -> str:
+        parts = ["📞 Входящий звонок"]
+        if door:
+            parts.append(f"Дверь: {door.name}")
+        elif address:
+            parts.append(f"Адрес: {address}")
+        if call_time:
+            parts.append(f"Время: {call_time.strftime('%H:%M:%S')}")
+        else:
+            parts.append(f"Время: {datetime.now().strftime('%H:%M:%S')}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _build_keyboard(
+        door_id: str | None,
+        video_url: str | None,
+    ) -> InlineKeyboardMarkup | None:
+        buttons: list[list[InlineKeyboardButton]] = []
+        if door_id:
+            buttons.append([InlineKeyboardButton(text="🔓 Открыть", callback_data=f"open:{door_id}")])
+        if video_url:
+            buttons.append([InlineKeyboardButton(text="📹 Видео", url=video_url)])
+        if not buttons:
+            return None
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    async def _send_notification(
+        self,
+        user_ids: list[int],
+        text: str,
+        photo_url: str | None = None,
+        door_id: str | None = None,
+        video_url: str | None = None,
+    ) -> None:
+        kb = self._build_keyboard(door_id=door_id, video_url=video_url)
+
+        for uid in user_ids:
+            try:
+                if photo_url:
+                    await self._bot.send_photo(
+                        chat_id=uid,
+                        photo=photo_url,
+                        caption=text,
+                        reply_markup=kb,
+                    )
+                else:
+                    await self._bot.send_message(
+                        chat_id=uid,
+                        text=text,
+                        reply_markup=kb,
+                    )
+            except Exception as exc:
+                logger.warning("Failed to send notification to user %s: %s", uid, exc)
+
+    def get_seen_ids_count(self) -> int:
+        return len(self._seen_ids)

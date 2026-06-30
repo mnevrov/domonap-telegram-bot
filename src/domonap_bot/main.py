@@ -7,6 +7,7 @@ from domonap_bot.logging_config import setup_logging
 from domonap_bot.storage.sqlite import SqliteStorage
 from domonap_bot.storage.tokens import TokenStorage
 from domonap_bot.telegram.bot import build_bot
+from domonap_bot.telegram.call_watcher import CallWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +24,14 @@ async def main() -> None:
 
     bot, dp = build_bot(settings, client)
 
+    watcher = CallWatcher(client, bot, settings)
+    await watcher.start()
+
     try:
         logger.info("Starting bot polling")
         await dp.start_polling(bot)
     finally:
+        await watcher.stop()
         await client.close()
         await storage.close()
 

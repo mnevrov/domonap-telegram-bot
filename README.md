@@ -27,6 +27,7 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 | `DOMONAP_PHONE` | Your Domonap account phone number |
 | `STORAGE_PATH` | Path to SQLite database file (default: `data/storage.db`) |
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO) |
+| `CALL_WATCHER_ENABLED` | Enable incoming call notifications (default: true) |
 
 4. Run with Docker:
 
@@ -67,3 +68,22 @@ Authorization uses Domonap's SMS-based flow:
 Tokens are stored in the SQLite database (`data/storage.db` by default) and refreshed automatically when needed. Use `/logout` to clear tokens at any time.
 
 > ⚠️ SMS codes and tokens are never written to logs. If you enable `LOG_LEVEL=DEBUG`, be aware that aiogram logs raw message text at this level.
+
+## Incoming Call Notifications
+
+When `CALL_WATCHER_ENABLED=true` (default), the bot monitors incoming calls and sends notifications to all `ALLOWED_TELEGRAM_USER_IDS`:
+
+- Door name/address (if available)
+- Call time
+- Photo/preview (if available via API)
+- **"Открыть" button** — opens the door with one tap
+- **"Видео" button** — opens video stream URL (if available)
+
+**How it works:**
+1. The bot first tries a real-time connection via SignalR Notification Hub.
+2. If SignalR is unavailable, it falls back to polling the call log every 5 seconds.
+3. Duplicate call IDs are ignored to prevent repeated notifications.
+
+Disable with `CALL_WATCHER_ENABLED=false` in `.env`.
+
+No sensitive data (tokens, SIP credentials, internal headers) is ever included in notifications.
