@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_SEEN_IDS = 1000
 _POLL_INTERVAL = 5.0
+_SIGNALR_RETRY_INTERVAL = 300.0
 
 
 class CallWatcher:
@@ -46,17 +48,21 @@ class CallWatcher:
 
     async def _run(self) -> None:
         await self._load_door_map()
-
-        try:
-            async for event in self._client.listen_events():
-                await self._handle_payload(event)
-        except NotImplementedError:
-            logger.info("listen_events not available, using polling")
-        except Exception as exc:
-            logger.warning("listen_events failed (%s), using polling", exc)
-
         await self._prepopulate_seen()
-        await self._poll_loop()
+
+        while True:
+            try:
+                async for event in self._client.listen_events():
+                    await self._handle_payload(event)
+                return  # generator ended cleanly (client closed) — watcher is stopping
+            except asyncio.CancelledError:
+                raise
+            except NotImplementedError:
+                logger.info("listen_events not available, using polling")
+            except Exception as exc:
+                logger.warning("listen_events failed (%s), falling back to polling", exc)
+
+            await self._poll_loop(max_duration=_SIGNALR_RETRY_INTERVAL)
 
     async def _prepopulate_seen(self) -> None:
         try:
@@ -67,21 +73,22 @@ class CallWatcher:
         except Exception as exc:
             logger.warning("Failed to pre-populate seen IDs: %s", exc)
 
-    async def _poll_loop(self) -> None:
+    async def _poll_loop(self, max_duration: float | None = None) -> None:
+        deadline = time.monotonic() + max_duration if max_duration is not None else None
         while True:
             try:
                 logs = await self._client.get_call_logs(per_page=10, missed_calls=False)
                 for entry in logs:
                     await self._handle_entry(entry)
             except asyncio.CancelledError:
-                return
+                raise
             except Exception as exc:
                 logger.warning("Call log poll error: %s", exc)
 
-            try:
-                await asyncio.sleep(_POLL_INTERVAL)
-            except asyncio.CancelledError:
+            if deadline is not None and time.monotonic() >= deadline:
                 return
+
+            await asyncio.sleep(_POLL_INTERVAL)
 
     async def _load_door_map(self) -> None:
         try:

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -5,9 +6,7 @@ import pytest
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
-from domonap_bot.telegram.call_watcher import CallWatcher, _MAX_SEEN_IDS
-
-
+from domonap_bot.telegram.call_watcher import _MAX_SEEN_IDS, CallWatcher
 
 
 @pytest.fixture
@@ -200,6 +199,63 @@ class TestDeduplication:
         w = CallWatcher(client, bot, disabled_settings)
         await w.start()
         assert w._task is None
+
+
+class TestSignalRRetry:
+    async def test_run_retries_signalr_after_bounded_polling(
+        self, monkeypatch: pytest.MonkeyPatch, bot: MagicMock, settings: Settings
+    ) -> None:
+        import domonap_bot.telegram.call_watcher as call_watcher_module
+
+        # Use small but nonzero intervals: a real asyncio.sleep() call is needed
+        # so the event loop actually yields to this test's watchdog coroutine.
+        monkeypatch.setattr(call_watcher_module, "_SIGNALR_RETRY_INTERVAL", 0.01)
+        monkeypatch.setattr(call_watcher_module, "_POLL_INTERVAL", 0.01)
+
+        client = MagicMock()
+        client.listen_events = AsyncMock(side_effect=RuntimeError("signalr down"))
+        client.get_call_logs = AsyncMock(return_value=[])
+        client.get_doors = AsyncMock(return_value=[])
+
+        watcher = CallWatcher(client, bot, settings)
+        run_task = asyncio.create_task(watcher._run())
+
+        async def wait_for_second_attempt() -> None:
+            while client.listen_events.call_count < 2:
+                await asyncio.sleep(0)
+
+        try:
+            await asyncio.wait_for(wait_for_second_attempt(), timeout=2.0)
+        finally:
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+
+        assert client.listen_events.call_count >= 2
+
+    async def test_stop_does_not_hang_while_polling(
+        self, monkeypatch: pytest.MonkeyPatch, bot: MagicMock, settings: Settings
+    ) -> None:
+        """Regression test: cancellation during _poll_loop's sleep must propagate,
+        not be swallowed, otherwise CallWatcher.stop() hangs forever on shutdown."""
+        import domonap_bot.telegram.call_watcher as call_watcher_module
+
+        monkeypatch.setattr(call_watcher_module, "_POLL_INTERVAL", 10.0)
+
+        client = MagicMock()
+        client.listen_events = AsyncMock(side_effect=NotImplementedError("n/a"))
+        client.get_call_logs = AsyncMock(return_value=[])
+        client.get_doors = AsyncMock(return_value=[])
+
+        watcher = CallWatcher(client, bot, settings)
+        watcher._task = asyncio.create_task(watcher._run())
+
+        # Give _run a chance to reach the poll loop's sleep before stopping.
+        await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(watcher.stop(), timeout=2.0)
 
 
 class TestSignalRRecordParsing:
