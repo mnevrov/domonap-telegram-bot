@@ -21,6 +21,8 @@ async def main() -> None:
 
     token_storage = TokenStorage(storage)
     client = DomonapClient(token_storage, phone=settings.domonap_phone)
+    restored = await client.hydrate_from_storage()
+    logger.info("Session restored from storage: %s", restored)
 
     bot, dp = build_bot(settings, client)
 

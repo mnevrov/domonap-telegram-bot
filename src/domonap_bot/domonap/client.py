@@ -156,6 +156,22 @@ class DomonapClient:
         if refresh_token:
             self._refresh_token_invalid = False
 
+    async def hydrate_from_storage(self) -> bool:
+        """Restore a previously persisted session into this client.
+
+        Must be called once during startup, before any concurrent request
+        path (polling, call watcher) begins — no locking is needed here.
+        """
+        session = await self._token_storage.load_full()
+        if session is None:
+            return False
+        self.set_tokens(
+            session.access_token, session.refresh_token, session.refresh_expiration_date
+        )
+        if not self._phone and session.phone:
+            self._phone = session.phone
+        return True
+
     def _now_utc(self) -> datetime:
         return datetime.now(timezone.utc)
 

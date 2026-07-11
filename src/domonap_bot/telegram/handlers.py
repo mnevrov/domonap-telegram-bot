@@ -112,7 +112,7 @@ def register_handlers(
     @router.message(Command("status"))
     @access.require_access
     async def cmd_status(message: Message) -> None:
-        has_token = await client.token_storage.load()
+        has_token = client.access_token or client.refresh_token
         if not has_token:
             await message.answer(
                 "Authenticated: ❌\n"
