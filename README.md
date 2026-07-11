@@ -29,6 +29,10 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO) |
 | `CALL_WATCHER_ENABLED` | Enable incoming call notifications (default: true) |
 
+   > ⚠️ **If `ALLOWED_TELEGRAM_USER_IDS` is left empty, the bot allows access to ANY
+   > Telegram user who finds it.** Set this to your own Telegram user ID(s) before
+   > deploying, especially before exposing the bot token.
+
 4. Run with Docker:
 
    ```bash

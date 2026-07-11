@@ -16,6 +16,12 @@ async def main() -> None:
     settings = Settings()  # type: ignore[call-arg]
     setup_logging(settings.log_level)
 
+    if not settings.allowed_telegram_user_ids:
+        logger.warning(
+            "ALLOWED_TELEGRAM_USER_IDS is empty — the bot is open to ALL Telegram "
+            "users. Set this in .env to restrict access."
+        )
+
     storage = SqliteStorage(settings.storage_path_resolved)
     await storage.initialize()
 
