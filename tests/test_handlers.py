@@ -1,8 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock
 
+from aiogram import Router
 from aiogram.types import CallbackQuery, Message, User
 
 from domonap_bot.domonap.exceptions import (
+    ApiError,
     DomonapError,
     NetworkError,
     SessionExpiredError,
@@ -13,6 +15,7 @@ from domonap_bot.telegram.handlers import (
     CooldownManager,
     _describe_error,
     _mask_phone,
+    register_handlers,
 )
 
 
@@ -47,6 +50,11 @@ class TestAccessControl:
 
     def test_user_not_in_allowlist(self) -> None:
         ac = AccessControl([42, 100])
+        assert ac.is_allowed(1) is False
+        assert ac.is_allowed(0) is False
+
+    def test_empty_allowlist_denies_all_when_default_allow_false(self) -> None:
+        ac = AccessControl([], default_allow=False)
         assert ac.is_allowed(1) is False
         assert ac.is_allowed(0) is False
 
@@ -222,6 +230,115 @@ class TestMaskPhone:
 
     def test_only_digits_short(self) -> None:
         assert _mask_phone("12") == "12"
+
+
+def _build_callback_handlers(client: MagicMock) -> dict[str, object]:
+    router = Router()
+    access = AccessControl([1])
+    admin_access = AccessControl([1], default_allow=False)
+    register_handlers(router, client, access, admin_access)
+    return {h.callback.__name__: h.callback for h in router.callback_query.handlers}
+
+
+class TestAnswerAndEndCall:
+    async def test_answer_call_success(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(return_value=True)
+        handlers = _build_callback_handlers(client)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "answer:call123"
+
+        await handlers["callback_answer_call"](cb)
+
+        client.answer_call.assert_awaited_once_with("call123")
+        cb.message.edit_text.assert_awaited_once_with("📞 Call answered.")
+
+    async def test_answer_call_failure_result(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(return_value=False)
+        handlers = _build_callback_handlers(client)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "answer:call123"
+
+        await handlers["callback_answer_call"](cb)
+
+        cb.message.edit_text.assert_awaited_once_with("❌ Failed to answer call.")
+
+    async def test_answer_call_domonap_error(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(side_effect=ApiError("boom"))
+        handlers = _build_callback_handlers(client)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "answer:call123"
+
+        await handlers["callback_answer_call"](cb)
+
+        cb.message.edit_text.assert_awaited_once()
+        assert "API error" in cb.message.edit_text.call_args[0][0]
+
+    async def test_answer_call_respects_cooldown(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(return_value=True)
+        handlers = _build_callback_handlers(client)
+
+        cb1 = _make_callback(user_id=1)
+        cb1.data = "answer:call123"
+        await handlers["callback_answer_call"](cb1)
+
+        cb2 = _make_callback(user_id=1)
+        cb2.data = "answer:call123"
+        await handlers["callback_answer_call"](cb2)
+
+        client.answer_call.assert_awaited_once()
+        cb2.answer.assert_awaited_with(
+            cb2.answer.call_args[0][0], show_alert=True
+        )
+
+    async def test_end_call_success(self) -> None:
+        client = MagicMock()
+        client.end_call = AsyncMock(return_value=True)
+        handlers = _build_callback_handlers(client)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "reject:call123"
+
+        await handlers["callback_end_call"](cb)
+
+        client.end_call.assert_awaited_once_with("call123")
+        cb.message.edit_text.assert_awaited_once_with("🔴 Call ended.")
+
+    async def test_end_call_domonap_error(self) -> None:
+        client = MagicMock()
+        client.end_call = AsyncMock(side_effect=ApiError("boom"))
+        handlers = _build_callback_handlers(client)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "reject:call123"
+
+        await handlers["callback_end_call"](cb)
+
+        cb.message.edit_text.assert_awaited_once()
+        assert "API error" in cb.message.edit_text.call_args[0][0]
+
+    async def test_answer_and_reject_have_independent_cooldowns(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(return_value=True)
+        client.end_call = AsyncMock(return_value=True)
+        handlers = _build_callback_handlers(client)
+
+        cb_answer = _make_callback(user_id=1)
+        cb_answer.data = "answer:call123"
+        await handlers["callback_answer_call"](cb_answer)
+
+        cb_reject = _make_callback(user_id=1)
+        cb_reject.data = "reject:call123"
+        await handlers["callback_end_call"](cb_reject)
+
+        client.answer_call.assert_awaited_once()
+        client.end_call.assert_awaited_once()
 
 
 

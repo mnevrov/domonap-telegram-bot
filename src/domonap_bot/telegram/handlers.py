@@ -295,6 +295,72 @@ def register_handlers(
         else:
             await callback.answer(text, show_alert=True)
 
+    @router.callback_query(F.data.startswith("answer:"))
+    @access.require_access
+    async def callback_answer_call(callback: CallbackQuery) -> None:
+        if not callback.data:
+            await callback.answer("Invalid callback data", show_alert=True)
+            return
+        user_id = callback.from_user.id if callback.from_user else 0
+        call_id = callback.data.removeprefix("answer:")
+        cooldown_key = f"answer:{call_id}"
+
+        if not cooldown.is_ready(user_id, cooldown_key):
+            remaining = cooldown.remaining(user_id, cooldown_key)
+            await callback.answer(
+                f"Please wait {remaining:.0f}s before retrying",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer("Answering call...")
+        cooldown.set(user_id, cooldown_key)
+
+        try:
+            success = await client.answer_call(call_id)
+        except DomonapError as exc:
+            await _respond_error(callback, exc)
+            return
+
+        text = "📞 Call answered." if success else "❌ Failed to answer call."
+        if callback.message and hasattr(callback.message, "edit_text"):
+            await callback.message.edit_text(text)
+        else:
+            await callback.answer(text, show_alert=True)
+
+    @router.callback_query(F.data.startswith("reject:"))
+    @access.require_access
+    async def callback_end_call(callback: CallbackQuery) -> None:
+        if not callback.data:
+            await callback.answer("Invalid callback data", show_alert=True)
+            return
+        user_id = callback.from_user.id if callback.from_user else 0
+        call_id = callback.data.removeprefix("reject:")
+        cooldown_key = f"reject:{call_id}"
+
+        if not cooldown.is_ready(user_id, cooldown_key):
+            remaining = cooldown.remaining(user_id, cooldown_key)
+            await callback.answer(
+                f"Please wait {remaining:.0f}s before retrying",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer("Ending call...")
+        cooldown.set(user_id, cooldown_key)
+
+        try:
+            success = await client.end_call(call_id)
+        except DomonapError as exc:
+            await _respond_error(callback, exc)
+            return
+
+        text = "🔴 Call ended." if success else "❌ Failed to end call."
+        if callback.message and hasattr(callback.message, "edit_text"):
+            await callback.message.edit_text(text)
+        else:
+            await callback.answer(text, show_alert=True)
+
 
 async def _auto_open_door(
     message: Message,

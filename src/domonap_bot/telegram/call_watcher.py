@@ -119,6 +119,7 @@ class CallWatcher:
             photo_url=payload.photo_url or payload.video_preview,
             door_id=payload.door_id or (door.door_id if door else None),
             video_url=video_url,
+            call_id=payload.call_id,
         )
 
     async def _handle_entry(self, entry: CallLogEntry) -> None:
@@ -135,6 +136,7 @@ class CallWatcher:
             photo_url=entry.photo_url,
             door_id=entry.door_id or (door.door_id if door else None),
             video_url=video_url,
+            call_id=entry.call_id,
         )
 
     def _add_seen(self, call_id: str) -> None:
@@ -163,10 +165,18 @@ class CallWatcher:
     def _build_keyboard(
         door_id: str | None,
         video_url: str | None,
+        call_id: str | None = None,
     ) -> InlineKeyboardMarkup | None:
         buttons: list[list[InlineKeyboardButton]] = []
+        if call_id:
+            buttons.append([
+                InlineKeyboardButton(text="📞 Ответить", callback_data=f"answer:{call_id}"),
+                InlineKeyboardButton(text="🔴 Сбросить", callback_data=f"reject:{call_id}"),
+            ])
         if door_id:
-            buttons.append([InlineKeyboardButton(text="🔓 Открыть", callback_data=f"open:{door_id}")])
+            buttons.append(
+                [InlineKeyboardButton(text="🔓 Открыть", callback_data=f"open:{door_id}")]
+            )
         if video_url:
             buttons.append([InlineKeyboardButton(text="📹 Видео", url=video_url)])
         if not buttons:
@@ -180,8 +190,9 @@ class CallWatcher:
         photo_url: str | None = None,
         door_id: str | None = None,
         video_url: str | None = None,
+        call_id: str | None = None,
     ) -> None:
-        kb = self._build_keyboard(door_id=door_id, video_url=video_url)
+        kb = self._build_keyboard(door_id=door_id, video_url=video_url, call_id=call_id)
 
         for uid in user_ids:
             try:

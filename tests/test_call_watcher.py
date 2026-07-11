@@ -157,6 +157,32 @@ class TestDeduplication:
         kb = watcher._build_keyboard(door_id=None, video_url=None)
         assert kb is None
 
+    async def test_keyboard_with_call_id(
+        self, watcher: CallWatcher,
+    ) -> None:
+        kb = watcher._build_keyboard(door_id=None, video_url=None, call_id="c1")
+        assert kb is not None
+        row = kb.inline_keyboard[0]
+        assert row[0].callback_data == "answer:c1"
+        assert row[0].text == "📞 Ответить"
+        assert row[1].callback_data == "reject:c1"
+        assert row[1].text == "🔴 Сбросить"
+
+    async def test_handle_entry_notification_includes_call_buttons(
+        self, watcher: CallWatcher, bot: MagicMock,
+    ) -> None:
+        entry = CallLogEntry(call_id="c1", door_id="d1", answered=False)
+
+        await watcher._handle_entry(entry)
+
+        kb = bot.send_message.call_args[1]["reply_markup"]
+        callback_datas = {
+            btn.callback_data for row in kb.inline_keyboard for btn in row if btn.callback_data
+        }
+        assert "answer:c1" in callback_datas
+        assert "reject:c1" in callback_datas
+        assert "open:d1" in callback_datas
+
     async def test_message_text_with_door(
         self, watcher: CallWatcher,
     ) -> None:
