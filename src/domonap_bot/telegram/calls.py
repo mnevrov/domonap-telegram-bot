@@ -8,7 +8,7 @@ from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import call_list_keyboard, call_detail_keyboard
-from domonap_bot.telegram.menu import _render
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +59,15 @@ def register_call_handlers(
                 await callback.answer()
                 return
 
-        # Estimate total pages from API (we don't have total count from client directly)
-        # Use the PagedResponse — but get_call_logs returns flat list. We'll assume
-        # if fewer than per_page, it's the last page.
         has_more = len(entries) >= _PER_PAGE
-        # Since we don't have total, use 999 as "more" indicator
-        if has_more:
-            total_pages_display = f"{page + 1}+"
-        else:
-            total_pages_display = str(page + 1)
+
+        door_map: dict[str, str] = {}
+        try:
+            doors = await client.get_doors()
+            door_map = {d.door_id: d.name for d in doors}
+            door_map.update({d.id: d.name for d in doors})
+        except Exception:
+            pass
 
         text = f"📞 Calls\n─────────────────────\n"
         text += f"Filter: {'Missed' if filter_missed else 'All'}\n\n"
@@ -77,19 +77,9 @@ def register_call_handlers(
         else:
             for e in entries:
                 status = "❌" if not e.answered else "✅"
-                name = ""
-                if e.door_id:
-                    try:
-                        doors = await client.get_doors()
-                        door = next(
-                            (d for d in doors if d.door_id == e.door_id or d.id == e.door_id), None
-                        )
-                        if door:
-                            name = door.name
-                    except Exception:
-                        pass
+                name = door_map.get(e.door_id or "", e.caller or e.call_id[:8])
                 time_str = e.call_time.strftime("%H:%M") if e.call_time else "??"
-                text += f"\n{status} {name or e.caller or e.call_id[:8]} — {time_str}"
+                text += f"\n{status} {name} — {time_str}"
 
         kb = call_list_keyboard(entries, page, max(1, page + (1 if has_more else 0)), filter_missed)
         await callback.message.edit_text(text, reply_markup=kb)
@@ -126,17 +116,18 @@ def register_call_handlers(
             await callback.answer()
             return
 
-        door_name = entry.caller or ""
-        if entry.door_id:
-            try:
-                doors = await client.get_doors()
-                door = next(
-                    (d for d in doors if d.door_id == entry.door_id or d.id == entry.door_id), None
-                )
-                if door:
-                    door_name = door.name
-            except Exception:
-                pass
+        door_info_map: dict[str, tuple[str, str | None]] = {}
+        try:
+            doors = await client.get_doors()
+            for d in doors:
+                key = d.door_id or d.id
+                url = d.http_video_url or d.webrtc_video_url
+                door_info_map[d.door_id] = (d.name, url)
+                door_info_map[d.id] = (d.name, url)
+        except Exception:
+            pass
+
+        door_name, video_url = door_info_map.get(entry.door_id or "", (entry.caller or "", None))
 
         parts = [
             "📞 Call Details",
@@ -146,18 +137,6 @@ def register_call_handlers(
             f"Status: {'Answered ✅' if entry.answered else 'Missed ❌'}",
         ]
         text = "\n".join(parts)
-
-        video_url = None
-        if entry.door_id:
-            try:
-                doors = await client.get_doors()
-                door = next(
-                    (d for d in doors if d.door_id == entry.door_id or d.id == entry.door_id), None
-                )
-                if door:
-                    video_url = door.http_video_url or door.webrtc_video_url
-            except Exception:
-                pass
 
         kb = call_detail_keyboard(entry.call_id, entry.door_id, video_url)
 
