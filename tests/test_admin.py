@@ -91,6 +91,7 @@ class TestUserList:
     async def test_user_list_shows_users(self) -> None:
         storage_mock = MagicMock()
         storage_mock.list_allowed_users = AsyncMock(return_value=[1, 42, 100])
+        storage_mock.list_admin_users = AsyncMock(return_value=[1])
         handlers = _build_admin_router(storage_mock)
 
         cb = _make_callback(user_id=1)
@@ -101,6 +102,7 @@ class TestUserList:
         text = cb.message.edit_text.call_args[0][0]
         assert "42" in text
         assert "100" in text
+        assert "👑" in text  # user 1 is admin
         cb.answer.assert_awaited_once()
 
 
@@ -119,11 +121,11 @@ class TestAddUserFSM:
         assert "user id" in text.lower()
         assert await state.get_state() == AdminStates.waiting_user_id
 
-    async def test_add_user_id_saves(self) -> None:
+    async def test_add_user_id_does_not_grant_admin(self) -> None:
         storage_mock = MagicMock()
         storage_mock.set_user_allowed = AsyncMock()
-        storage_mock.set_user_admin = AsyncMock()
         storage_mock.list_allowed_users = AsyncMock(return_value=[42])
+        storage_mock.list_admin_users = AsyncMock(return_value=[])
         handlers = _build_admin_router(storage_mock)
 
         msg = _make_message(user_id=1, text="42")
@@ -133,7 +135,13 @@ class TestAddUserFSM:
         await handlers["fsm_add_user_id"](msg, state)
 
         storage_mock.set_user_allowed.assert_awaited_once_with(42)
-        storage_mock.set_user_admin.assert_awaited_once_with(42)
+        storage_mock.set_user_admin.assert_not_called()
+
+        access: AccessControl = handlers["_access"]
+        admin_access: AccessControl = handlers["_admin_access"]
+        assert access.is_allowed(42)
+        assert not admin_access.is_allowed(42)
+
         msg.answer.assert_awaited()
         assert await state.get_state() is None
 
@@ -143,6 +151,7 @@ class TestRemoveUser:
         storage_mock = MagicMock()
         storage_mock.remove_user = AsyncMock()
         storage_mock.list_allowed_users = AsyncMock(return_value=[1])
+        storage_mock.list_admin_users = AsyncMock(return_value=[])
         handlers = _build_admin_router(storage_mock)
 
         cb = _make_callback(user_id=1)
@@ -158,6 +167,7 @@ class TestRemoveUser:
         storage_mock = MagicMock()
         storage_mock.remove_user = AsyncMock()
         storage_mock.list_allowed_users = AsyncMock(return_value=[1])
+        storage_mock.list_admin_users = AsyncMock(return_value=[])
         handlers = _build_admin_router(storage_mock)
 
         # First tap

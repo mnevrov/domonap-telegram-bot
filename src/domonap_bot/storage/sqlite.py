@@ -64,6 +64,22 @@ class SqliteStorage(Storage):
         val = await self.get(f"access:admin:{telegram_id}")
         return val == "1"
 
+    async def list_admin_users(self) -> list[int]:
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT key FROM kv_store WHERE key LIKE 'access:admin:%'"
+        )
+        rows = await cursor.fetchall()
+        result: list[int] = []
+        for (key,) in rows:
+            parts = key.split(":")
+            if len(parts) == 3:
+                try:
+                    result.append(int(parts[2]))
+                except ValueError:
+                    continue
+        return result
+
     async def list_allowed_users(self) -> list[int]:
         assert self._conn is not None
         cursor = await self._conn.execute(

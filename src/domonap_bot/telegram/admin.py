@@ -51,11 +51,16 @@ def register_admin_handlers(
     @admin_access.require_access
     async def callback_user_list(callback: CallbackQuery) -> None:
         users = await storage.list_allowed_users()
+        admin_ids = set(await storage.list_admin_users())
         if not users:
             text = "👥 Users\n─────────────────────\nNo users configured."
         else:
-            text = "👥 Users\n─────────────────────\n" + "\n".join(f"👤 {uid}" for uid in users)
-        await callback.message.edit_text(text, reply_markup=user_list_keyboard(users))
+            lines = []
+            for uid in users:
+                badge = " 👑" if uid in admin_ids else ""
+                lines.append(f"👤 {uid}{badge}")
+            text = "👥 Users\n─────────────────────\n" + "\n".join(lines)
+        await callback.message.edit_text(text, reply_markup=user_list_keyboard(users, admin_ids))
         await callback.answer()
 
     @router.callback_query(F.data == "a:add")
@@ -79,19 +84,70 @@ def register_admin_handlers(
 
         uid = int(text)
         await storage.set_user_allowed(uid)
-        await storage.set_user_admin(uid)
         if access is not None:
             access.add_user(uid)
-            admin_access.add_user(uid)
-        await message.answer(f"✅ User {uid} added.")
+        await message.answer(f"✅ User {uid} added as regular user.")
         await state.clear()
 
         users = await storage.list_allowed_users()
-        text = "👥 Users\n─────────────────────\n" + "\n".join(f"👤 {u}" for u in users) if users else "No users."
-        await message.answer(text, reply_markup=user_list_keyboard(users))
+        admin_ids = set(await storage.list_admin_users())
+        text = "👥 Users\n─────────────────────\n" + "\n".join(
+            f"👤 {u}{' 👑' if u in admin_ids else ''}" for u in users
+        ) if users else "No users."
+        await message.answer(text, reply_markup=user_list_keyboard(users, admin_ids))
 
     @router.message(AdminStates.waiting_user_id, F.text == "/cancel")
     async def fsm_cancel_add(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Cancelled.", reply_markup=back_keyboard("a:panel"))
+
+    @router.callback_query(F.data == "a:grant")
+    @admin_access.require_access
+    async def callback_grant_admin_start(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.message.edit_text(
+            "Send me the Telegram user ID to grant admin rights:\n\n"
+            "Example: `123456789`\n\n"
+            "Type /cancel to abort.",
+        )
+        await state.set_state(AdminStates.waiting_grant_admin_id)
+        await callback.answer()
+
+    @router.message(AdminStates.waiting_grant_admin_id, F.text)
+    @admin_access.require_access
+    async def fsm_grant_admin_id(message: Message, state: FSMContext) -> None:
+        text = message.text.strip()
+        if not text.isdigit():
+            await message.answer("Invalid ID. Please send a numeric Telegram user ID.")
+            return
+
+        uid = int(text)
+        if not await storage.is_user_allowed(uid):
+            await message.answer(
+                f"❌ User {uid} is not registered. Use 'Add user' first.",
+            )
+            return
+
+        if await storage.is_user_admin(uid):
+            await message.answer(f"ℹ️ User {uid} is already an admin.")
+            await state.clear()
+            return
+
+        await storage.set_user_admin(uid)
+        if admin_access is not None:
+            admin_access.add_user(uid)
+
+        await message.answer(f"✅ User {uid} is now an admin.")
+        await state.clear()
+
+        users = await storage.list_allowed_users()
+        admin_ids = set(await storage.list_admin_users())
+        text = "👥 Users\n─────────────────────\n" + "\n".join(
+            f"👤 {u}{' 👑' if u in admin_ids else ''}" for u in users
+        ) if users else "No users."
+        await message.answer(text, reply_markup=user_list_keyboard(users, admin_ids))
+
+    @router.message(AdminStates.waiting_grant_admin_id, F.text == "/cancel")
+    async def fsm_cancel_grant_admin(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Cancelled.", reply_markup=back_keyboard("a:panel"))
 
@@ -122,8 +178,11 @@ def register_admin_handlers(
         await callback.answer(f"User {uid} removed.")
 
         users = await storage.list_allowed_users()
-        text = "👥 Users\n─────────────────────\n" + "\n".join(f"👤 {u}" for u in users) if users else "No users."
-        await callback.message.edit_text(text, reply_markup=user_list_keyboard(users))
+        admin_ids = set(await storage.list_admin_users())
+        text = "👥 Users\n─────────────────────\n" + "\n".join(
+            f"👤 {u}{' 👑' if u in admin_ids else ''}" for u in users
+        ) if users else "No users."
+        await callback.message.edit_text(text, reply_markup=user_list_keyboard(users, admin_ids))
 
     @router.callback_query(F.data == "a:auth")
     @admin_access.require_access

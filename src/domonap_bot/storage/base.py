@@ -43,5 +43,9 @@ class Storage(ABC):
         ...
 
     @abstractmethod
+    async def list_admin_users(self) -> list[int]:
+        ...
+
+    @abstractmethod
     async def remove_user(self, telegram_id: int) -> None:
         ...

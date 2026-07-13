@@ -106,11 +106,19 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def user_list_keyboard(users: list[int]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=f"👤 {uid}  ❌", callback_data=f"a:rm:{uid}")] for uid in users
-    ]
+def user_list_keyboard(
+    users: list[int], admin_users: set[int] | None = None
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for uid in users:
+        is_admin = admin_users is not None and uid in admin_users
+        label = f"👤 {uid}{' 👑' if is_admin else ''}  ❌"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"a:rm:{uid}")])
     rows.append([InlineKeyboardButton(text="➕ Add user", callback_data="a:add")])
+    if admin_users is not None:
+        non_admin = [uid for uid in users if uid not in admin_users]
+        if non_admin:
+            rows.append([InlineKeyboardButton(text="⬆ Grant admin", callback_data="a:grant")])
     rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="a:panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
