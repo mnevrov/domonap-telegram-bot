@@ -9,7 +9,7 @@ from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import door_list_keyboard, door_detail_keyboard
-from domonap_bot.telegram.menu import _render
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,12 @@ def register_door_handlers(
         total = len(doors)
         total_pages = max(1, (total + _PER_PAGE - 1) // _PER_PAGE)
         start = page * _PER_PAGE
-        page_doors = doors[start: start + _PER_PAGE]
+        page_doors = doors[start : start + _PER_PAGE]
 
-        text = f"🚪 Doors ({total})\n─────────────────────\n" if total > 0 else "No doors available."
+        if total > 0:
+            text = f"🚪 Doors ({total})\n─────────────────────\n"
+        else:
+            text = "No doors available."
         lines = [f"{start + i + 1}. 🚪 {d.name}" for i, d in enumerate(page_doors)]
         text += "\n".join(lines)
 
@@ -74,7 +77,11 @@ def register_door_handlers(
             "─────────────────────",
         ]
         if door.domofon_public_pin:
-            masked = door.domofon_public_pin[:2] + "****" + door.domofon_public_pin[-2:] if len(door.domofon_public_pin) >= 4 else "****"
+            pin = door.domofon_public_pin
+            if len(pin) >= 4:
+                masked = pin[:2] + "****" + pin[-2:]
+            else:
+                masked = "****"
             parts.append(f"PIN: {masked}")
         if door.http_video_url or door.webrtc_video_url:
             parts.append("📹 Video available")
@@ -109,7 +116,5 @@ def register_door_handlers(
         text = "✅ Door opened!" if success else "❌ Failed to open."
         await callback.message.edit_text(
             text,
-            reply_markup=door_detail_keyboard(
-                DoorKey(id=door_id, door_id=door_id, name="")
-            ),
+            reply_markup=door_detail_keyboard(DoorKey(id=door_id, door_id=door_id, name="")),
         )
