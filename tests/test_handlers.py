@@ -38,10 +38,10 @@ def _make_callback(user_id: int) -> MagicMock:
 
 
 class TestAccessControl:
-    def test_empty_allowlist_allows_all(self) -> None:
+    def test_empty_allowlist_denies_all_by_default(self) -> None:
         ac = AccessControl([])
-        assert ac.is_allowed(1) is True
-        assert ac.is_allowed(999) is True
+        assert ac.is_allowed(1) is False
+        assert ac.is_allowed(999) is False
 
     def test_user_in_allowlist(self) -> None:
         ac = AccessControl([42, 100])
@@ -192,9 +192,9 @@ class TestAdminAccess:
         assert ac.is_allowed(42) is True
         assert ac.is_allowed(1) is False
 
-    def test_admin_default_allow_param(self) -> None:
+    def test_admin_default_allow_param_is_false(self) -> None:
         ac_regular = AccessControl([])
-        assert ac_regular.is_allowed(1) is True
+        assert ac_regular.is_allowed(1) is False
 
         ac_admin = AccessControl([], default_allow=False)
         assert ac_admin.is_allowed(1) is False

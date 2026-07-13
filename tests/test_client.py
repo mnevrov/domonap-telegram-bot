@@ -32,6 +32,18 @@ class FakeStorage(Storage):
     async def is_user_allowed(self, telegram_id: int) -> bool:
         return self._data.get(f"access:allowed:{telegram_id}") == "1"
 
+    async def list_admin_users(self) -> list[int]:
+        result: list[int] = []
+        for key, value in self._data.items():
+            if key.startswith("access:admin:") and value == "1":
+                parts = key.split(":")
+                if len(parts) == 3:
+                    try:
+                        result.append(int(parts[2]))
+                    except ValueError:
+                        continue
+        return result
+
     async def set_user_admin(self, telegram_id: int) -> None:
         self._data[f"access:admin:{telegram_id}"] = "1"
 

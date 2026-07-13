@@ -8,7 +8,12 @@ Handler = TypeVar("Handler", bound=Callable[..., Awaitable[Any]])
 
 
 class AccessControl:
-    def __init__(self, allowed_user_ids: list[int], *, default_allow: bool = True) -> None:
+    def __init__(
+        self,
+        allowed_user_ids: list[int] | None = None,
+        *,
+        default_allow: bool = False,
+    ) -> None:
         self._allowed = set(allowed_user_ids) if allowed_user_ids else set()
         self._default_allow = default_allow
 
