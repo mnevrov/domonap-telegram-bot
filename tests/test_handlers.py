@@ -11,8 +11,8 @@ from domonap_bot.domonap.exceptions import (
     TokenExpiredError,
 )
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.handlers import (
-    CooldownManager,
     _describe_error,
     _mask_phone,
     register_handlers,
@@ -236,7 +236,8 @@ def _build_callback_handlers(client: MagicMock) -> dict[str, object]:
     router = Router()
     access = AccessControl([1])
     admin_access = AccessControl([1], default_allow=False)
-    register_handlers(router, client, access, admin_access)
+    cooldown = CooldownManager()
+    register_handlers(router, client, access, admin_access, cooldown)
     return {h.callback.__name__: h.callback for h in router.callback_query.handlers}
 
 

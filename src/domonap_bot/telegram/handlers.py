@@ -1,5 +1,4 @@
 import logging
-from time import monotonic
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -14,11 +13,10 @@ from domonap_bot.domonap.exceptions import (
 )
 from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import door_selection_keyboard
 
 logger = logging.getLogger(__name__)
-
-_COOLDOWN_SECONDS = 5
 
 
 def _mask_phone(phone: str) -> str:
@@ -29,34 +27,6 @@ def _mask_phone(phone: str) -> str:
     if phone.startswith("+"):
         return f"+{masked}"
     return masked
-
-
-class CooldownManager:
-    def __init__(self, timeout: float = _COOLDOWN_SECONDS) -> None:
-        self._cooldowns: dict[tuple[int, str], float] = {}
-        self._timeout = timeout
-
-    def is_ready(self, user_id: int, door_id: str) -> bool:
-        last = self._cooldowns.get((user_id, door_id))
-        if last is None:
-            return True
-        return monotonic() - last >= self._timeout
-
-    def set(self, user_id: int, door_id: str) -> None:
-        self._cooldowns[(user_id, door_id)] = monotonic()
-
-    def remaining(self, user_id: int, door_id: str) -> float:
-        last = self._cooldowns.get((user_id, door_id))
-        if last is None:
-            return 0.0
-        return max(0.0, self._timeout - (monotonic() - last))
-
-    def clear_expired(self) -> int:
-        now = monotonic()
-        expired = [k for k, t in self._cooldowns.items() if now - t >= self._timeout]
-        for k in expired:
-            del self._cooldowns[k]
-        return len(expired)
 
 
 def _describe_error(exc: DomonapError) -> str:
@@ -72,8 +42,8 @@ def register_handlers(
     client: DomonapClient,
     access: AccessControl,
     admin_access: AccessControl,
+    cooldown: CooldownManager,
 ) -> None:
-    cooldown = CooldownManager()
 
     async def _respond_error(
         target: Message | CallbackQuery,
