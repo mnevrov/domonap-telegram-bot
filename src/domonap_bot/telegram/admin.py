@@ -5,9 +5,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from domonap_bot.domonap.client import DomonapClient
-from domonap_bot.storage.sqlite import SqliteStorage
+from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
-from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.fsm import AdminStates
 from domonap_bot.telegram.keyboards import admin_panel_keyboard, user_list_keyboard, back_keyboard
 
@@ -17,9 +16,8 @@ logger = logging.getLogger(__name__)
 def register_admin_handlers(
     router: Router,
     client: DomonapClient,
-    storage: SqliteStorage,
+    storage: Storage,
     admin_access: AccessControl,
-    cooldown: CooldownManager,
 ) -> None:
     async def _admin_panel(event: Message | CallbackQuery) -> None:
         has_token = client.access_token or client.refresh_token

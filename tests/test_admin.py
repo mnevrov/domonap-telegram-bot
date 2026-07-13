@@ -41,8 +41,7 @@ def _build_admin_router(storage_mock: MagicMock) -> dict[str, object]:
     router = Router()
     client = MagicMock()
     admin_access = AccessControl([1], default_allow=False)
-    cooldown = CooldownManager()
-    register_admin_handlers(router, client, storage_mock, admin_access, cooldown)
+    register_admin_handlers(router, client, storage_mock, admin_access)
     handlers: dict[str, object] = {}
     for h in router.callback_query.handlers:
         if hasattr(h.callback, "__name__"):
