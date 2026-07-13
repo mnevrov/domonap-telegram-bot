@@ -12,10 +12,6 @@ from domonap_bot.telegram.keyboards import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
-# Per-user tracked dashboard message_id
-dashboard: dict[int, int] = {}
-
-
 async def _render(
     target: Message | CallbackQuery,
     text: str,
@@ -25,10 +21,7 @@ async def _render(
         await target.message.edit_text(text, reply_markup=kb)
         await target.answer()
     elif isinstance(target, Message):
-        sent = await target.answer(text, reply_markup=kb)
-        if sent and hasattr(sent, "message_id"):
-            uid = target.from_user.id if target.from_user else 0
-            dashboard[uid] = sent.message_id
+        await target.answer(text, reply_markup=kb)
 
 
 def register_menu_handlers(

@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message, User
 from domonap_bot.storage.sqlite import SqliteStorage
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.menu import register_menu_handlers, dashboard
+from domonap_bot.telegram.menu import register_menu_handlers
 
 
 def _make_message(user_id: int) -> MagicMock:

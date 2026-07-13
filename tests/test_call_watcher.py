@@ -14,6 +14,7 @@ def settings() -> Settings:
     return Settings(
         telegram_bot_token="test:token",
         allowed_telegram_user_ids=[123, 456],
+        admin_telegram_user_ids=[],
         call_watcher_enabled=True,
     )
 
@@ -220,6 +221,7 @@ class TestDeduplication:
         disabled_settings = Settings(
             telegram_bot_token="test:token",
             allowed_telegram_user_ids=[123],
+            admin_telegram_user_ids=[],
             call_watcher_enabled=False,
         )
         w = CallWatcher(client, bot, disabled_settings)

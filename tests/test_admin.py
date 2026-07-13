@@ -12,6 +12,12 @@ from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.fsm import AdminStates
 
 
+@pytest.fixture(autouse=True)
+def _clear_pending_removals() -> None:
+    from domonap_bot.telegram.admin import _pending_removals
+    _pending_removals.clear()
+
+
 @pytest.fixture
 def cooldown() -> CooldownManager:
     return CooldownManager()
@@ -41,7 +47,8 @@ def _build_admin_router(storage_mock: MagicMock) -> dict[str, object]:
     router = Router()
     client = MagicMock()
     admin_access = AccessControl([1], default_allow=False)
-    register_admin_handlers(router, client, storage_mock, admin_access)
+    access = AccessControl([])
+    register_admin_handlers(router, client, storage_mock, admin_access, access)
     handlers: dict[str, object] = {}
     for h in router.callback_query.handlers:
         if hasattr(h.callback, "__name__"):
@@ -49,6 +56,8 @@ def _build_admin_router(storage_mock: MagicMock) -> dict[str, object]:
     for h in router.message.handlers:
         if hasattr(h.callback, "__name__"):
             handlers[h.callback.__name__] = h.callback
+    handlers["_access"] = access
+    handlers["_admin_access"] = admin_access
     return handlers
 
 
@@ -113,6 +122,7 @@ class TestAddUserFSM:
     async def test_add_user_id_saves(self) -> None:
         storage_mock = MagicMock()
         storage_mock.set_user_allowed = AsyncMock()
+        storage_mock.set_user_admin = AsyncMock()
         storage_mock.list_allowed_users = AsyncMock(return_value=[42])
         handlers = _build_admin_router(storage_mock)
 
@@ -123,12 +133,13 @@ class TestAddUserFSM:
         await handlers["fsm_add_user_id"](msg, state)
 
         storage_mock.set_user_allowed.assert_awaited_once_with(42)
+        storage_mock.set_user_admin.assert_awaited_once_with(42)
         msg.answer.assert_awaited()
         assert await state.get_state() is None
 
 
 class TestRemoveUser:
-    async def test_remove_user(self) -> None:
+    async def test_remove_user_requires_confirmation(self) -> None:
         storage_mock = MagicMock()
         storage_mock.remove_user = AsyncMock()
         storage_mock.list_allowed_users = AsyncMock(return_value=[1])
@@ -137,7 +148,27 @@ class TestRemoveUser:
         cb = _make_callback(user_id=1)
         cb.data = "a:rm:42"
 
+        # First tap — prompts confirmation
         await handlers["callback_remove_user"](cb)
 
+        storage_mock.remove_user.assert_not_awaited()
+        cb.answer.assert_awaited_with("Tap again to confirm remove user 42", show_alert=True)
+
+    async def test_remove_user_confirm_on_second_tap(self) -> None:
+        storage_mock = MagicMock()
+        storage_mock.remove_user = AsyncMock()
+        storage_mock.list_allowed_users = AsyncMock(return_value=[1])
+        handlers = _build_admin_router(storage_mock)
+
+        # First tap
+        cb1 = _make_callback(user_id=1)
+        cb1.data = "a:rm:42"
+        await handlers["callback_remove_user"](cb1)
+
+        # Second tap confirms
+        cb2 = _make_callback(user_id=1)
+        cb2.data = "a:rm:42"
+        await handlers["callback_remove_user"](cb2)
+
         storage_mock.remove_user.assert_awaited_once_with(42)
-        cb.answer.assert_awaited_with("User 42 removed.")
+        cb2.answer.assert_awaited_with("User 42 removed.")

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from aiogram import F, Router
@@ -13,11 +14,15 @@ from domonap_bot.telegram.keyboards import admin_panel_keyboard, user_list_keybo
 logger = logging.getLogger(__name__)
 
 
+_pending_removals: dict[int, int] = {}
+
+
 def register_admin_handlers(
     router: Router,
     client: DomonapClient,
     storage: Storage,
     admin_access: AccessControl,
+    access: AccessControl | None = None,
 ) -> None:
     async def _admin_panel(event: Message | CallbackQuery) -> None:
         has_token = client.access_token or client.refresh_token
@@ -74,6 +79,10 @@ def register_admin_handlers(
 
         uid = int(text)
         await storage.set_user_allowed(uid)
+        await storage.set_user_admin(uid)
+        if access is not None:
+            access.add_user(uid)
+            admin_access.add_user(uid)
         await message.answer(f"✅ User {uid} added.")
         await state.clear()
 
@@ -96,7 +105,20 @@ def register_admin_handlers(
             await callback.answer("Invalid user ID.", show_alert=True)
             return
 
+        admin_id = callback.from_user.id if callback.from_user else 0
+        pending = _pending_removals.get(admin_id)
+
+        if pending != uid:
+            _pending_removals[admin_id] = uid
+            asyncio.get_event_loop().call_later(10, lambda: _pending_removals.pop(admin_id, None))
+            await callback.answer(f"Tap again to confirm remove user {uid}", show_alert=True)
+            return
+
+        _pending_removals.pop(admin_id, None)
         await storage.remove_user(uid)
+        if access is not None:
+            access.remove_user(uid)
+            admin_access.remove_user(uid)
         await callback.answer(f"User {uid} removed.")
 
         users = await storage.list_allowed_users()
