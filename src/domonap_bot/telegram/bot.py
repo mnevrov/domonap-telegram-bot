@@ -7,6 +7,7 @@ from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.admin import register_admin_handlers
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.handlers import register_handlers
+from domonap_bot.telegram.menu import register_menu_handlers
 
 
 def build_bot(
@@ -28,6 +29,7 @@ def build_bot(
 
     if storage is not None:
         register_admin_handlers(router, client, storage, admin_access)
+        register_menu_handlers(router, client, storage, access, admin_access, cooldown)
 
     dp.include_router(router)
     return bot, dp
