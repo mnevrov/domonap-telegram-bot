@@ -1,11 +1,14 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from domonap_bot.config import Settings
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.telegram.bot import build_bot
 
 
-def test_build_bot_wires_router_without_error() -> None:
+@pytest.mark.asyncio
+async def test_build_bot_wires_router_without_error() -> None:
     settings = Settings(
         telegram_bot_token="123456:TEST-TOKEN",
         allowed_telegram_user_ids=[],
@@ -13,7 +16,7 @@ def test_build_bot_wires_router_without_error() -> None:
     )
     client = MagicMock(spec=DomonapClient)
 
-    bot, dp = build_bot(settings, client)
+    bot, dp = await build_bot(settings, client)
 
     assert bot.token == "123456:TEST-TOKEN"
     assert len(dp.sub_routers) == 1

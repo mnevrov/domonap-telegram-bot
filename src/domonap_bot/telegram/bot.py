@@ -12,7 +12,7 @@ from domonap_bot.telegram.handlers import register_handlers
 from domonap_bot.telegram.menu import register_menu_handlers
 
 
-def build_bot(
+async def build_bot(
     settings: Settings,
     client: DomonapClient,
     storage: Storage | None = None,
@@ -26,12 +26,20 @@ def build_bot(
         settings.admin_telegram_user_ids,
         default_allow=False,
     )
+
+    if storage is not None:
+        stored_users = await storage.list_allowed_users()
+        for uid in stored_users:
+            access.add_user(uid)
+            if await storage.is_user_admin(uid):
+                admin_access.add_user(uid)
+
     cooldown = CooldownManager()
     register_handlers(router, client, access, admin_access, cooldown)
 
     if storage is not None:
         register_menu_handlers(router, client, storage, access, admin_access, cooldown)
-        register_admin_handlers(router, client, storage, admin_access)
+        register_admin_handlers(router, client, storage, admin_access, access)
 
     register_door_handlers(router, client, access, cooldown)
     register_call_handlers(router, client, access, cooldown)

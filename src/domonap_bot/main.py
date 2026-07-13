@@ -30,7 +30,7 @@ async def main() -> None:
     restored = await client.hydrate_from_storage()
     logger.info("Session restored from storage: %s", restored)
 
-    bot, dp = build_bot(settings, client, storage)
+    bot, dp = await build_bot(settings, client, storage)
 
     watcher = CallWatcher(client, bot, settings)
     await watcher.start()

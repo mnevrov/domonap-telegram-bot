@@ -17,6 +17,12 @@ class AccessControl:
             return True
         return user_id in self._allowed
 
+    def add_user(self, user_id: int) -> None:
+        self._allowed.add(user_id)
+
+    def remove_user(self, user_id: int) -> None:
+        self._allowed.discard(user_id)
+
     def require_access(self, handler: Handler) -> Handler:
         @wraps(handler)
         async def wrapper(event: Message | CallbackQuery, *args: Any, **kwargs: Any) -> Any:
