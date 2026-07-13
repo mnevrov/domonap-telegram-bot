@@ -2,7 +2,9 @@ from aiogram import Bot, Dispatcher, Router
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.admin import register_admin_handlers
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.handlers import register_handlers
 
@@ -10,6 +12,7 @@ from domonap_bot.telegram.handlers import register_handlers
 def build_bot(
     settings: Settings,
     client: DomonapClient,
+    storage: Storage | None = None,
 ) -> tuple[Bot, Dispatcher]:
     bot = Bot(token=settings.telegram_bot_token)
     dp = Dispatcher()
@@ -22,6 +25,9 @@ def build_bot(
     )
     cooldown = CooldownManager()
     register_handlers(router, client, access, admin_access, cooldown)
+
+    if storage is not None:
+        register_admin_handlers(router, client, storage, admin_access, cooldown)
 
     dp.include_router(router)
     return bot, dp
