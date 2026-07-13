@@ -5,7 +5,9 @@ from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.admin import register_admin_handlers
+from domonap_bot.telegram.calls import register_call_handlers
 from domonap_bot.telegram.cooldown import CooldownManager
+from domonap_bot.telegram.doors import register_door_handlers
 from domonap_bot.telegram.handlers import register_handlers
 from domonap_bot.telegram.menu import register_menu_handlers
 
@@ -28,8 +30,11 @@ def build_bot(
     register_handlers(router, client, access, admin_access, cooldown)
 
     if storage is not None:
-        register_admin_handlers(router, client, storage, admin_access)
         register_menu_handlers(router, client, storage, access, admin_access, cooldown)
+        register_admin_handlers(router, client, storage, admin_access)
+
+    register_door_handlers(router, client, access, cooldown)
+    register_call_handlers(router, client, access, cooldown)
 
     dp.include_router(router)
     return bot, dp

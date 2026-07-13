@@ -58,27 +58,6 @@ def register_handlers(
         else:
             await target.answer(msg)
 
-    @router.message(Command("start"))
-    @access.require_access
-    async def cmd_start(message: Message) -> None:
-        user_id = message.from_user.id if message.from_user else 0
-        lines = [
-            "🏠 Domonap Bot\n",
-            "Commands:",
-            "/status — connection & auth status",
-            "/doors — list available doors",
-            "/open — choose a door to open",
-        ]
-        if admin_access.is_allowed(user_id):
-            lines.extend([
-                "",
-                "Admin commands:",
-                "/auth — request SMS code for Domonap",
-                "/code <code> — confirm SMS code",
-                "/logout — clear saved tokens",
-            ])
-        await message.answer("\n".join(lines))
-
     @router.message(Command("status"))
     @access.require_access
     async def cmd_status(message: Message) -> None:
