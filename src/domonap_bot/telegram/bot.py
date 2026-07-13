@@ -1,4 +1,5 @@
 from aiogram import Bot, Dispatcher, Router
+from aiogram.client.session.aiohttp import AiohttpSession
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.client import DomonapClient
@@ -17,7 +18,9 @@ async def build_bot(
     client: DomonapClient,
     storage: Storage | None = None,
 ) -> tuple[Bot, Dispatcher]:
-    bot = Bot(token=settings.telegram_bot_token)
+    session = AiohttpSession()
+    session.timeout = 120
+    bot = Bot(token=settings.telegram_bot_token, session=session)
     dp = Dispatcher()
     router = Router()
 

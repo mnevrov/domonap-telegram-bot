@@ -1,6 +1,26 @@
-from pathlib import Path
+from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _parse_user_ids(v: Any) -> list[int]:
+    if isinstance(v, list):
+        return v
+    if isinstance(v, (int, float)):
+        return [int(v)]
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return []
+        if v.startswith("[") and v.endswith("]"):
+            return json.loads(v)
+        return [int(x.strip()) for x in v.split(",") if x.strip()]
+    return []
 
 
 class Settings(BaseSettings):
@@ -17,6 +37,11 @@ class Settings(BaseSettings):
     storage_path: str = "data/storage.db"
     log_level: str = "INFO"
     call_watcher_enabled: bool = True
+
+    @field_validator("allowed_telegram_user_ids", "admin_telegram_user_ids", mode="before")
+    @classmethod
+    def coerce_user_ids(cls, v: Any) -> list[int]:
+        return _parse_user_ids(v)
 
     @property
     def storage_path_resolved(self) -> Path:

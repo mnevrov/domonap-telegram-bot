@@ -35,6 +35,7 @@ class DomonapAuth:
             return True
 
         body = resp.text[:500]
+        logger.warning("SMS request failed (%s): %s", resp.status_code, body)
         raise ApiError(f"SMS request failed ({resp.status_code}): {body}")
 
     async def confirm_code(

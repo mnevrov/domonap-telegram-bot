@@ -241,6 +241,58 @@ def _build_callback_handlers(client: MagicMock) -> dict[str, object]:
     return {h.callback.__name__: h.callback for h in router.callback_query.handlers}
 
 
+def _build_message_handlers(client: MagicMock) -> dict[str, object]:
+    router = Router()
+    access = AccessControl([1])
+    admin_access = AccessControl([1], default_allow=False)
+    cooldown = CooldownManager()
+    register_handlers(router, client, access, admin_access, cooldown)
+    return {h.callback.__name__: h.callback for h in router.message.handlers}
+
+
+class TestImportTokens:
+    async def test_import_tokens_requires_both_tokens(self) -> None:
+        client = MagicMock()
+        handlers = _build_message_handlers(client)
+
+        msg = _make_message(user_id=1)
+        msg.text = "/import_tokens only_access"
+
+        await handlers["cmd_import_tokens"](msg)
+
+        msg.answer.assert_awaited_once()
+        assert "Usage: /import_tokens" in msg.answer.call_args[0][0]
+
+    async def test_import_tokens_saves_session(self) -> None:
+        client = MagicMock()
+        client.set_tokens = MagicMock()
+        client.phone = "+79991234567"
+        client.device_token = "device-token"
+        client.instance_id = "instance-id"
+        client.token_storage = MagicMock()
+        client.token_storage.save = AsyncMock()
+        handlers = _build_message_handlers(client)
+
+        msg = _make_message(user_id=1)
+        msg.text = "/import_tokens access-123 refresh-456"
+        msg.delete = AsyncMock()
+
+        await handlers["cmd_import_tokens"](msg)
+
+        client.set_tokens.assert_called_once_with("access-123", "refresh-456", None)
+        client.token_storage.save.assert_awaited_once()
+        session = client.token_storage.save.await_args.args[0]
+        assert session.access_token == "access-123"
+        assert session.refresh_token == "refresh-456"
+        assert session.phone == "+79991234567"
+        assert session.device_token == "device-token"
+        assert session.instance_id == "instance-id"
+        msg.delete.assert_awaited_once()
+        msg.answer.assert_awaited_once_with(
+            "✅ Tokens imported successfully. Use /status to verify."
+        )
+
+
 class TestAnswerAndEndCall:
     async def test_answer_call_success(self) -> None:
         client = MagicMock()
@@ -253,7 +305,9 @@ class TestAnswerAndEndCall:
         await handlers["callback_answer_call"](cb)
 
         client.answer_call.assert_awaited_once_with("call123")
-        cb.message.edit_text.assert_awaited_once_with("📞 Call answered.")
+        cb.message.edit_text.assert_awaited_once()
+        assert cb.message.edit_text.call_args[0][0] == "📞 Call answered."
+        assert cb.message.edit_text.call_args[1]["reply_markup"] is not None
 
     async def test_answer_call_failure_result(self) -> None:
         client = MagicMock()
@@ -265,7 +319,9 @@ class TestAnswerAndEndCall:
 
         await handlers["callback_answer_call"](cb)
 
-        cb.message.edit_text.assert_awaited_once_with("❌ Failed to answer call.")
+        cb.message.edit_text.assert_awaited_once()
+        assert cb.message.edit_text.call_args[0][0] == "❌ Failed to answer call."
+        assert cb.message.edit_text.call_args[1]["reply_markup"] is not None
 
     async def test_answer_call_domonap_error(self) -> None:
         client = MagicMock()
@@ -309,7 +365,9 @@ class TestAnswerAndEndCall:
         await handlers["callback_end_call"](cb)
 
         client.end_call.assert_awaited_once_with("call123")
-        cb.message.edit_text.assert_awaited_once_with("🔴 Call ended.")
+        cb.message.edit_text.assert_awaited_once()
+        assert cb.message.edit_text.call_args[0][0] == "🔴 Call ended."
+        assert cb.message.edit_text.call_args[1]["reply_markup"] is not None
 
     async def test_end_call_domonap_error(self) -> None:
         client = MagicMock()
@@ -340,6 +398,5 @@ class TestAnswerAndEndCall:
 
         client.answer_call.assert_awaited_once()
         client.end_call.assert_awaited_once()
-
 
 

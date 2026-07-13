@@ -47,6 +47,7 @@ class CallWatcher:
                 pass
 
     async def _run(self) -> None:
+        await self._wait_for_auth()
         await self._load_door_map()
         await self._prepopulate_seen()
 
@@ -63,6 +64,12 @@ class CallWatcher:
                 logger.warning("listen_events failed (%s), falling back to polling", exc)
 
             await self._poll_loop(max_duration=_SIGNALR_RETRY_INTERVAL)
+
+    async def _wait_for_auth(self) -> None:
+        """Block until the client has an access or refresh token."""
+        while not self._client.access_token and not self._client.refresh_token:
+            logger.debug("Waiting for authentication before starting call watcher...")
+            await asyncio.sleep(10)
 
     async def _prepopulate_seen(self) -> None:
         try:

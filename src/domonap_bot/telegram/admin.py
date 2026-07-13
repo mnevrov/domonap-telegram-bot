@@ -6,10 +6,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.exceptions import DomonapError, NetworkError
 from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.errors import describe_error
 from domonap_bot.telegram.fsm import AdminStates
-from domonap_bot.telegram.keyboards import admin_panel_keyboard, user_list_keyboard, back_keyboard
+from domonap_bot.telegram.keyboards import admin_panel_keyboard, back_keyboard, user_list_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,11 @@ def register_admin_handlers(
         await state.set_state(AdminStates.waiting_user_id)
         await callback.answer()
 
+    @router.message(AdminStates.waiting_user_id, F.text == "/cancel")
+    async def fsm_cancel_add(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Cancelled.", reply_markup=back_keyboard("a:panel"))
+
     @router.message(AdminStates.waiting_user_id, F.text)
     @admin_access.require_access
     async def fsm_add_user_id(message: Message, state: FSMContext) -> None:
@@ -96,11 +103,6 @@ def register_admin_handlers(
         ) if users else "No users."
         await message.answer(text, reply_markup=user_list_keyboard(users, admin_ids))
 
-    @router.message(AdminStates.waiting_user_id, F.text == "/cancel")
-    async def fsm_cancel_add(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=back_keyboard("a:panel"))
-
     @router.callback_query(F.data == "a:grant")
     @admin_access.require_access
     async def callback_grant_admin_start(callback: CallbackQuery, state: FSMContext) -> None:
@@ -111,6 +113,11 @@ def register_admin_handlers(
         )
         await state.set_state(AdminStates.waiting_grant_admin_id)
         await callback.answer()
+
+    @router.message(AdminStates.waiting_grant_admin_id, F.text == "/cancel")
+    async def fsm_cancel_grant_admin(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Cancelled.", reply_markup=back_keyboard("a:panel"))
 
     @router.message(AdminStates.waiting_grant_admin_id, F.text)
     @admin_access.require_access
@@ -145,11 +152,6 @@ def register_admin_handlers(
             f"👤 {u}{' 👑' if u in admin_ids else ''}" for u in users
         ) if users else "No users."
         await message.answer(text, reply_markup=user_list_keyboard(users, admin_ids))
-
-    @router.message(AdminStates.waiting_grant_admin_id, F.text == "/cancel")
-    async def fsm_cancel_grant_admin(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=back_keyboard("a:panel"))
 
     @router.callback_query(F.data.startswith("a:rm:"))
     @admin_access.require_access
@@ -189,10 +191,26 @@ def register_admin_handlers(
     async def callback_admin_auth(callback: CallbackQuery) -> None:
         phone = client.phone
         if not phone:
-            await callback.message.edit_text("No phone configured.", reply_markup=back_keyboard("a:panel"))
+            await callback.message.edit_text(
+                "No phone configured.", reply_markup=back_keyboard("a:panel")
+            )
             await callback.answer()
             return
-        success = await client.login(phone)
+        await callback.answer("Requesting SMS...")
+        try:
+            success = await client.login(phone)
+        except NetworkError:
+            await callback.message.edit_text(
+                "Network unavailable. Please try again later.",
+                reply_markup=back_keyboard("a:panel"),
+            )
+            return
+        except DomonapError as exc:
+            await callback.message.edit_text(
+                describe_error(exc),
+                reply_markup=back_keyboard("a:panel"),
+            )
+            return
         if success:
             masked = "".join(c for c in phone if c.isdigit())
             masked = masked[:3] + "***" + masked[-2:] if len(masked) >= 4 else masked
@@ -203,8 +221,9 @@ def register_admin_handlers(
                 reply_markup=back_keyboard("a:panel"),
             )
         else:
-            await callback.message.edit_text("Failed to request SMS.", reply_markup=back_keyboard("a:panel"))
-        await callback.answer()
+            await callback.message.edit_text(
+                "Failed to request SMS.", reply_markup=back_keyboard("a:panel")
+            )
 
     @router.callback_query(F.data == "a:logout")
     @admin_access.require_access
