@@ -6,15 +6,17 @@ from aiogram.types import CallbackQuery, Message
 
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import (
+    ApiError,
     DomonapError,
     NetworkError,
     SessionExpiredError,
     TokenExpiredError,
 )
-from domonap_bot.domonap.models import DoorKey
+from domonap_bot.domonap.models import AuthSession, DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import door_selection_keyboard
+from domonap_bot.telegram.errors import describe_error as _describe_error
+from domonap_bot.telegram.keyboards import back_keyboard, door_selection_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +29,6 @@ def _mask_phone(phone: str) -> str:
     if phone.startswith("+"):
         return f"+{masked}"
     return masked
-
-
-def _describe_error(exc: DomonapError) -> str:
-    if isinstance(exc, (TokenExpiredError, SessionExpiredError)):
-        return "Session expired. Re-authentication required."
-    if isinstance(exc, NetworkError):
-        return "Network unavailable. Please try again later."
-    return f"API error: {exc}"
 
 
 def register_handlers(
@@ -159,8 +153,9 @@ def register_handlers(
         except NetworkError:
             await message.answer("Network unavailable. Please try again later.")
             return
-        except DomonapError:
-            await message.answer("Failed to request SMS code. Try again later.")
+        except DomonapError as exc:
+            logger.warning("SMS request failed for phone %s: %s", _mask_phone(phone), exc)
+            await message.answer(_describe_error(exc))
             return
 
         if success:
@@ -208,6 +203,41 @@ def register_handlers(
         client.mark_session_expired("user logout")
         await message.answer("✅ Tokens cleared. Logged out.")
 
+    @router.message(Command("import_tokens"))
+    @admin_access.require_access
+    async def cmd_import_tokens(message: Message) -> None:
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 3:
+            await message.answer(
+                "Usage: /import_tokens <access_token> <refresh_token>\n\n"
+                "Example: /import_tokens eyJhbG... eyJjbG..."
+            )
+            return
+
+        access_token = parts[1].strip()
+        refresh_token = parts[2].strip()
+
+        if not access_token or not refresh_token:
+            await message.answer("Tokens cannot be empty.")
+            return
+
+        client.set_tokens(access_token, refresh_token, None)
+        session = AuthSession(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            phone=client.phone,
+            device_token=client.device_token,
+            instance_id=client.instance_id,
+        )
+        await client.token_storage.save(session)
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        await message.answer("✅ Tokens imported successfully. Use /status to verify.")
+
     @router.callback_query(F.data.startswith("open:"))
     @access.require_access
     async def callback_open_door(callback: CallbackQuery) -> None:
@@ -232,7 +262,7 @@ def register_handlers(
             success = await client.open_door(door_id)
         except DomonapError as exc:
             if callback.message and hasattr(callback.message, "edit_text"):
-                await callback.message.edit_text(_describe_error(exc))
+                await callback.message.edit_text(_describe_error(exc), reply_markup=back_keyboard("m:main"))
             else:
                 await callback.answer(_describe_error(exc), show_alert=True)
             return
@@ -240,7 +270,7 @@ def register_handlers(
         text = "✅ Door opened successfully!" if success else "❌ Failed to open door."
 
         if callback.message and hasattr(callback.message, "edit_text"):
-            await callback.message.edit_text(text)
+            await callback.message.edit_text(text, reply_markup=back_keyboard("m:main"))
         else:
             await callback.answer(text, show_alert=True)
 
@@ -273,7 +303,7 @@ def register_handlers(
 
         text = "📞 Call answered." if success else "❌ Failed to answer call."
         if callback.message and hasattr(callback.message, "edit_text"):
-            await callback.message.edit_text(text)
+            await callback.message.edit_text(text, reply_markup=back_keyboard("m:main"))
         else:
             await callback.answer(text, show_alert=True)
 
@@ -306,7 +336,7 @@ def register_handlers(
 
         text = "🔴 Call ended." if success else "❌ Failed to end call."
         if callback.message and hasattr(callback.message, "edit_text"):
-            await callback.message.edit_text(text)
+            await callback.message.edit_text(text, reply_markup=back_keyboard("m:main"))
         else:
             await callback.answer(text, show_alert=True)
 

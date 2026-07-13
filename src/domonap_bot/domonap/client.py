@@ -112,7 +112,7 @@ class DomonapClient:
 
         self._http = httpx.AsyncClient(
             base_url=BASE_URL,
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx.Timeout(30.0, connect=15.0),
             headers=headers,
         )
         self.auth = DomonapAuth(self._http)
@@ -325,12 +325,9 @@ class DomonapClient:
     # --- Auth helpers ---
 
     async def login(self, phone: str) -> bool:
-        try:
-            country_code, number = _phone_digits(phone)
-            await self.auth.request_code(country_code, number)
-            return True
-        except (ApiError, NetworkError):
-            return False
+        country_code, number = _phone_digits(phone)
+        await self.auth.request_code(country_code, number)
+        return True
 
     async def confirm_login(self, code: str) -> bool:
         try:

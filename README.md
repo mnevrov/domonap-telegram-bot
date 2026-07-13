@@ -29,9 +29,9 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO) |
 | `CALL_WATCHER_ENABLED` | Enable incoming call notifications (default: true) |
 
-   > ⚠️ **If `ALLOWED_TELEGRAM_USER_IDS` is left empty, the bot allows access to ANY
-   > Telegram user who finds it.** Set this to your own Telegram user ID(s) before
-   > deploying, especially before exposing the bot token.
+> ⚠️ **`ALLOWED_TELEGRAM_USER_IDS` is required.** The bot refuses to start
+> if empty. Set at least one Telegram user ID before deploying,
+> especially before exposing the bot token.
 
 4. Run with Docker:
 
@@ -52,15 +52,48 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 
 | Command | Access | Description |
 |---|---|---|
-| `/start` | allowed | Welcome message with available commands |
-| `/status` | allowed | Authentication status (safe info only) |
+| `/start` | allowed | Welcome menu with inline keyboard: Doors, Calls, Admin (if admin) |
+| `/status` | allowed | Authentication status: safe info only) |
 | `/doors` | allowed | List available doors |
-| `/open` | allowed | Select and open a door (interactive) |
+| `/open` | allowed | Open a door (single door auto-opens; multiple doors show selection keyboard |
 | `/auth` | admin | Request SMS code from Domonap |
 | `/code <code>` | admin | Confirm SMS code and save tokens |
 | `/logout` | admin | Clear saved tokens |
 
-## Authorization
+## Navigation
+
+The bot uses inline keyboards for all interactions (no complex menu states).
+
+### Main menu (`/start`)
+
+- **🚪 Doors** → paginated door list
+- **📞 Calls** → call log with filters (All/Missed)
+- **⚙️ Admin** → admin panel (admins only)
+
+### Doors
+
+- **Door list** — tap a door to see details (- **Door detail** — shows door info:
+  - **🔓 Open** — opens the door (cooldown-limited)
+  - **📹 Video** — opens video stream URL (if available)
+
+### Calls
+
+- **Call list** — paginated call log (All/Missed filter toggle)
+- **Call detail** — shows caller info, photo, video
+  - **📞 Answer** — answer the call
+  - **🔴 Reject** — end call
+  - **🔓 Open door** — open door (if linked)
+  - **📹 Video** — open video stream URL (if available)
+
+### Admin panel (admins only)
+
+- **👥 Users** → user management
+  - **👤 {id}** — user row (admin badge 👑 if if admin)
+  - **❌**** — remove user (tap twice to confirm)
+  - **➕ Add user** — add Telegram user ID as regular (non-admin) user
+  - **⬆ Grant admin** — promote existing user to admin (only shown for non-admins)
+- **🔑 /auth** — request SMS code from Domonap
+- **🚪 /logout** — clear stored tokens
 
 Authorization uses Domonap's SMS-based flow:
 

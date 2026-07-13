@@ -7,7 +7,7 @@ from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import call_list_keyboard, call_detail_keyboard
+from domonap_bot.telegram.keyboards import back_keyboard, call_list_keyboard, call_detail_keyboard
 
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ def register_call_handlers(
                 missed_calls=filter_missed,
             )
         except DomonapError:
-            await callback.message.edit_text("Failed to load call logs.")
+            await callback.message.edit_text("Failed to load call logs.", reply_markup=back_keyboard("m:main"))
             await callback.answer()
             return
 
@@ -55,7 +55,7 @@ def register_call_handlers(
                     missed_calls=filter_missed,
                 )
             except DomonapError:
-                await callback.message.edit_text("Failed to load call logs.")
+                await callback.message.edit_text("Failed to load call logs.", reply_markup=back_keyboard("m:main"))
                 await callback.answer()
                 return
 
@@ -106,13 +106,13 @@ def register_call_handlers(
         try:
             entries = await client.get_call_logs(per_page=50, missed_calls=False)
         except DomonapError:
-            await callback.message.edit_text("Failed to load call details.")
+            await callback.message.edit_text("Failed to load call details.", reply_markup=back_keyboard("c:p:0"))
             await callback.answer()
             return
 
         entry = next((e for e in entries if e.call_id == call_id), None)
         if not entry:
-            await callback.message.edit_text("Call not found.")
+            await callback.message.edit_text("Call not found.", reply_markup=back_keyboard("c:p:0"))
             await callback.answer()
             return
 
