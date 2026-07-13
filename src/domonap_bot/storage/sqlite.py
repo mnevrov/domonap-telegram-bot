@@ -49,3 +49,37 @@ class SqliteStorage(Storage):
             (key,),
         )
         await self._conn.commit()
+
+    async def set_user_allowed(self, telegram_id: int) -> None:
+        await self.set(f"access:allowed:{telegram_id}", "1")
+
+    async def is_user_allowed(self, telegram_id: int) -> bool:
+        val = await self.get(f"access:allowed:{telegram_id}")
+        return val == "1"
+
+    async def set_user_admin(self, telegram_id: int) -> None:
+        await self.set(f"access:admin:{telegram_id}", "1")
+
+    async def is_user_admin(self, telegram_id: int) -> bool:
+        val = await self.get(f"access:admin:{telegram_id}")
+        return val == "1"
+
+    async def list_allowed_users(self) -> list[int]:
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT key FROM kv_store WHERE key LIKE 'access:allowed:%'"
+        )
+        rows = await cursor.fetchall()
+        result: list[int] = []
+        for (key,) in rows:
+            parts = key.split(":")
+            if len(parts) == 3:
+                try:
+                    result.append(int(parts[2]))
+                except ValueError:
+                    continue
+        return result
+
+    async def remove_user(self, telegram_id: int) -> None:
+        await self.delete(f"access:allowed:{telegram_id}")
+        await self.delete(f"access:admin:{telegram_id}")
