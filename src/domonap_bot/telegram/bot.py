@@ -27,7 +27,7 @@ def build_bot(
     register_handlers(router, client, access, admin_access, cooldown)
 
     if storage is not None:
-        register_admin_handlers(router, client, storage, admin_access, cooldown)
+        register_admin_handlers(router, client, storage, admin_access)
 
     dp.include_router(router)
     return bot, dp
