@@ -6,7 +6,6 @@ from aiogram.types import CallbackQuery, Message
 
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import (
-    ApiError,
     DomonapError,
     NetworkError,
     SessionExpiredError,
@@ -262,7 +261,9 @@ def register_handlers(
             success = await client.open_door(door_id)
         except DomonapError as exc:
             if callback.message and hasattr(callback.message, "edit_text"):
-                await callback.message.edit_text(_describe_error(exc), reply_markup=back_keyboard("m:main"))
+                await callback.message.edit_text(
+                    _describe_error(exc), reply_markup=back_keyboard("m:main")
+                )
             else:
                 await callback.answer(_describe_error(exc), show_alert=True)
             return
