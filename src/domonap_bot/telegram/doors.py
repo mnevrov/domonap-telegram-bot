@@ -7,6 +7,7 @@ from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import back_keyboard, door_detail_keyboard, door_list_keyboard
 
@@ -24,7 +25,16 @@ def register_door_handlers(
     @router.callback_query(F.data.startswith("d:p:"))
     @access.require_access
     async def callback_door_list(callback: CallbackQuery) -> None:
-        page_str = callback.data.removeprefix("d:p:")
+        data = callback.data
+        if not data:
+            await callback.answer("Invalid data", show_alert=True)
+            return
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer("Message unavailable", show_alert=True)
+            return
+
+        page_str = data.removeprefix("d:p:")
         try:
             page = int(page_str)
         except ValueError:
@@ -33,7 +43,7 @@ def register_door_handlers(
         try:
             doors = await client.get_doors()
         except DomonapError:
-            await callback.message.edit_text(
+            await message.edit_text(
                 "Failed to load doors.", reply_markup=back_keyboard("m:main")
             )
             await callback.answer()
@@ -52,18 +62,26 @@ def register_door_handlers(
         text += "\n".join(lines)
 
         kb = door_list_keyboard(page_doors, page, total_pages)
-        await callback.message.edit_text(text, reply_markup=kb)
+        await message.edit_text(text, reply_markup=kb)
         await callback.answer()
 
     @router.callback_query(F.data.startswith("d:det:"))
     @access.require_access
     async def callback_door_detail(callback: CallbackQuery) -> None:
-        door_id = callback.data.removeprefix("d:det:")
+        data = callback.data
+        if not data:
+            await callback.answer("Invalid data", show_alert=True)
+            return
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer("Message unavailable", show_alert=True)
+            return
+        door_id = data.removeprefix("d:det:")
 
         try:
             doors = await client.get_doors()
         except DomonapError:
-            await callback.message.edit_text(
+            await message.edit_text(
                 "Failed to load door details.", reply_markup=back_keyboard("d:p:0")
             )
             await callback.answer()
@@ -71,7 +89,7 @@ def register_door_handlers(
 
         door = next((d for d in doors if d.id == door_id), None)
         if not door:
-            await callback.message.edit_text("Door not found.", reply_markup=back_keyboard("d:p:0"))
+            await message.edit_text("Door not found.", reply_markup=back_keyboard("d:p:0"))
             await callback.answer()
             return
 
@@ -90,16 +108,21 @@ def register_door_handlers(
             parts.append("📹 Video available")
         text = "\n".join(parts)
 
-        await callback.message.edit_text(text, reply_markup=door_detail_keyboard(door))
+        await message.edit_text(text, reply_markup=door_detail_keyboard(door))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("d:open:"))
     @access.require_access
     async def callback_door_open(callback: CallbackQuery) -> None:
-        if not callback.data:
+        data = callback.data
+        if not data:
             await callback.answer("Invalid data", show_alert=True)
             return
-        door_id = callback.data.removeprefix("d:open:")
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer("Message unavailable", show_alert=True)
+            return
+        door_id = data.removeprefix("d:open:")
         user_id = callback.from_user.id if callback.from_user else 0
 
         if not cooldown.is_ready(user_id, door_id):
@@ -113,11 +136,11 @@ def register_door_handlers(
         try:
             success = await client.open_door(door_id)
         except DomonapError as exc:
-            await callback.message.edit_text(f"❌ {exc}")
+            await message.edit_text(f"❌ {exc}")
             return
 
         text = "✅ Door opened!" if success else "❌ Failed to open."
-        await callback.message.edit_text(
+        await message.edit_text(
             text,
-            reply_markup=door_detail_keyboard(DoorKey(id=door_id, door_id=door_id, name="")),
+            reply_markup=door_detail_keyboard(DoorKey(id=door_id, doorId=door_id, name="")),
         )
