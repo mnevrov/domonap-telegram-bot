@@ -19,6 +19,8 @@ async def test_hydrate_from_storage_restores_tokens(storage: FakeStorage) -> Non
             refresh_token="saved_refresh",
             refresh_expiration_date="2027-01-01T00:00:00+03:00",
             phone="+79991234567",
+            device_token="00000000-0000-4000-8000-000000000011",
+            instance_id="00000000-0000-4000-8000-000000000012",
         )
     )
 
@@ -33,6 +35,11 @@ async def test_hydrate_from_storage_restores_tokens(storage: FakeStorage) -> Non
     assert client.refresh_token == "saved_refresh"
     assert client.refresh_expiration_date == "2027-01-01T00:00:00+03:00"
     assert client.phone == "+79991234567"
+    assert client.device_token == "00000000-0000-4000-8000-000000000011"
+    assert client.instance_id == "00000000-0000-4000-8000-000000000012"
+    assert (
+        client._http.headers["instanceId"] == "00000000-0000-4000-8000-000000000012;"
+    )
 
 
 async def test_hydrate_from_storage_keeps_configured_phone(storage: FakeStorage) -> None:
