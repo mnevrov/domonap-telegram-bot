@@ -8,8 +8,7 @@ from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import back_keyboard, door_list_keyboard, door_detail_keyboard
-
+from domonap_bot.telegram.keyboards import back_keyboard, door_detail_keyboard, door_list_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,9 @@ def register_door_handlers(
         try:
             doors = await client.get_doors()
         except DomonapError:
-            await callback.message.edit_text("Failed to load doors.", reply_markup=back_keyboard("m:main"))
+            await callback.message.edit_text(
+                "Failed to load doors.", reply_markup=back_keyboard("m:main")
+            )
             await callback.answer()
             return
 
@@ -62,7 +63,9 @@ def register_door_handlers(
         try:
             doors = await client.get_doors()
         except DomonapError:
-            await callback.message.edit_text("Failed to load door details.", reply_markup=back_keyboard("d:p:0"))
+            await callback.message.edit_text(
+                "Failed to load door details.", reply_markup=back_keyboard("d:p:0")
+            )
             await callback.answer()
             return
 

@@ -1,6 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram import Router
 from aiogram.types import CallbackQuery, User
 
