@@ -87,8 +87,12 @@ async def submit_sms_code(
         )
         return False
 
+    error: DomonapError | None = None
     try:
         success = await client.confirm_login(normalized)
+    except DomonapError as exc:
+        success = False
+        error = exc
     finally:
         try:
             await message.delete()
@@ -101,6 +105,10 @@ async def submit_sms_code(
         return True
 
     await state.clear()
+    if error is not None:
+        await message.answer(f"❌ {describe_error(error)}")
+        return False
+
     await message.answer(
         "❌ Код не принят или сессия авторизации истекла. "
         "Запросите новый код через /auth или раздел «Управление»."
