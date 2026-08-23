@@ -3,7 +3,6 @@ import json
 from collections.abc import Callable
 
 import aiohttp
-import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
