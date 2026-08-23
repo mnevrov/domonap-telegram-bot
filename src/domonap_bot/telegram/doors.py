@@ -5,12 +5,12 @@ from aiogram.types import CallbackQuery
 
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import DomonapError
-from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error
-from domonap_bot.telegram.keyboards import back_keyboard, door_detail_keyboard
+from domonap_bot.telegram.keyboards import back_keyboard
+from domonap_bot.telegram.navigation import NavigationStore
 from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text
 from domonap_bot.telegram.ui.views import View, door_detail_view, door_list_view
 
@@ -24,39 +24,32 @@ def register_door_handlers(
     client: DomonapClient,
     access: AccessControl,
     cooldown: CooldownManager,
+    navigation: NavigationStore | None = None,
 ) -> None:
-    @router.callback_query(F.data.startswith("d:p:"))
-    @access.require_access
-    async def callback_door_list(callback: CallbackQuery) -> None:
-        data = callback.data
-        if not data:
-            await acknowledge_callback(callback, "Некорректные данные", show_alert=True)
-            return
+    nav = navigation or NavigationStore()
+
+    async def _render_door_list(callback: CallbackQuery, page: int) -> None:
         message = editable_callback_message(callback)
         if message is None:
-            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
+        uid = callback.from_user.id if callback.from_user else 0
 
-        page_str = data.removeprefix("d:p:")
-        try:
-            page = max(0, int(page_str))
-        except ValueError:
-            page = 0
-
-        await acknowledge_callback(callback)
         try:
             doors = await client.get_doors()
         except DomonapError:
             await edit_text(
                 message,
-                View("Не удалось загрузить двери.", back_keyboard("m:main", "← Главное меню")),
+                View(
+                    "Не удалось загрузить двери.",
+                    back_keyboard("m:main", "← Главное меню"),
+                ),
             )
             return
 
         total = len(doors)
         total_pages = max(1, (total + _PER_PAGE - 1) // _PER_PAGE)
-        if page >= total_pages:
-            page = total_pages - 1
+        page = min(max(0, page), total_pages - 1)
+        nav.set_door_page(uid, page)
         start = page * _PER_PAGE
         page_doors = doors[start : start + _PER_PAGE]
         await edit_text(
@@ -68,6 +61,37 @@ def register_door_handlers(
                 total=total,
             ),
         )
+
+    @router.callback_query(F.data.startswith("d:p:"))
+    @access.require_access
+    async def callback_door_list(callback: CallbackQuery) -> None:
+        data = callback.data
+        if not data:
+            await acknowledge_callback(callback, "Некорректные данные", show_alert=True)
+            return
+        if editable_callback_message(callback) is None:
+            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
+            return
+
+        page_str = data.removeprefix("d:p:")
+        try:
+            page = max(0, int(page_str))
+        except ValueError:
+            page = 0
+
+        await acknowledge_callback(callback)
+        await _render_door_list(callback, page)
+
+    @router.callback_query(F.data == "d:back")
+    @access.require_access
+    async def callback_door_back(callback: CallbackQuery) -> None:
+        if editable_callback_message(callback) is None:
+            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
+            return
+        uid = callback.from_user.id if callback.from_user else 0
+        page = nav.get(uid).door_page
+        await acknowledge_callback(callback)
+        await _render_door_list(callback, page)
 
     @router.callback_query(F.data.startswith("d:det:"))
     @access.require_access
@@ -88,13 +112,19 @@ def register_door_handlers(
         except DomonapError:
             await edit_text(
                 message,
-                View("Не удалось загрузить данные двери.", back_keyboard("d:p:0", "← Двери")),
+                View(
+                    "Не удалось загрузить данные двери.",
+                    back_keyboard("d:back", "← Двери"),
+                ),
             )
             return
 
         door = next((item for item in doors if item.door_id == door_id), None)
         if door is None:
-            await edit_text(message, View("Дверь не найдена.", back_keyboard("d:p:0", "← Двери")))
+            await edit_text(
+                message,
+                View("Дверь не найдена.", back_keyboard("d:back", "← Двери")),
+            )
             return
 
         await edit_text(message, door_detail_view(door))
@@ -130,18 +160,21 @@ def register_door_handlers(
         except DomonapError as exc:
             await edit_text(
                 message,
-                View(f"❌ {describe_error(exc)}", back_keyboard("d:p:0", "← Двери")),
+                View(
+                    f"❌ {describe_error(exc)}",
+                    back_keyboard("d:back", "← К дверям"),
+                ),
             )
             return
 
         if success:
             view = View(
                 "✅ Дверь открыта.",
-                door_detail_keyboard(DoorKey(id=door_id, doorId=door_id, name="Дверь")),
+                back_keyboard("d:back", "← К дверям"),
             )
         else:
             view = View(
                 "❌ Не удалось открыть дверь.",
-                back_keyboard("d:p:0", "← Двери"),
+                back_keyboard("d:back", "← К дверям"),
             )
         await edit_text(message, view)
