@@ -5,7 +5,6 @@ import json
 import logging
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
 
 import aiohttp
 from pydantic import ValidationError
