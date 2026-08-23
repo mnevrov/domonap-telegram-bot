@@ -22,7 +22,9 @@ _ENDPOINT_RE = re.compile(
     r"[\"']/?((?:sso-api|client-api|communication-api)/[^\"'\\s?#]+)[\"']"
 )
 _DOMONAP_HOST_RE = re.compile(r"https?://([A-Za-z0-9.-]*domonap\.[A-Za-z.]+)")
-_DOMOFON_EVENT_RE = re.compile(r"[\"'](Domofon[A-Za-z0-9_]+)[\"']")
+_DOMOFON_EVENT_RE = re.compile(
+    r"[\"'](Domofon(?:Calling|Call[A-Za-z0-9_]+))[\"']"
+)
 _VERSION_CODE_RE = re.compile(r"\bVERSION_CODE\s*=\s*(\d+)\b")
 _VERSION_NAME_RE = re.compile(r"\bVERSION_NAME\s*=\s*[\"']([^\"']+)[\"']")
 _METHOD_ANNOTATION_RE = re.compile(
