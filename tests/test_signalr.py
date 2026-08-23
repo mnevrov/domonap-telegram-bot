@@ -10,10 +10,10 @@ from aiohttp.test_utils import TestServer
 
 from domonap_bot.domonap import signalr as signalr_module
 from domonap_bot.domonap.signalr import (
+    _MAX_WEBSOCKET_MESSAGE_SIZE,
     SIGNALR_USER_AGENT,
     DomonapSignalRTransport,
     SignalRConnectionError,
-    _MAX_WEBSOCKET_MESSAGE_SIZE,
     split_signalr_records,
 )
 
