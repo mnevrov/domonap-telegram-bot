@@ -31,11 +31,14 @@ cp .env.example .env
 | `ALLOWED_TELEGRAM_USER_IDS` | Ваш Telegram user ID (и других доверенных людей) через запятую — кто сможет открывать двери |
 | `ADMIN_TELEGRAM_USER_IDS` | Telegram user ID тех, кто может авторизовывать бота в Domonap |
 | `DOMONAP_PHONE` | Номер телефона аккаунта Domonap (в международном формате) |
+| `DOMONAP_REGISTER_DEVICE_TOKEN` | `false` по умолчанию: не вызывать `UpdateDeviceToken` и не перехватывать push-маршрут официального приложения; `true` — явно зарегистрировать deviceToken бота |
 | `STORAGE_PATH` | Путь к файлу БД SQLite, по умолчанию `data/storage.db` — обычно не трогать |
 | `LOG_LEVEL` | `INFO` по умолчанию, `DEBUG` для отладки |
 | `CALL_WATCHER_ENABLED` | `true`, чтобы получать уведомления о входящих звонках |
 
 ⚠️ **Важно:** если оставить `ALLOWED_TELEGRAM_USER_IDS` пустым, бот будет открыт для **любого** пользователя Telegram, который его найдёт. Обязательно укажите свой ID перед запуском в продакшене.
+
+Для совместной работы с официальным приложением рекомендуется оставить `DOMONAP_REGISTER_DEVICE_TOKEN=false`. При SMS-авторизации `deviceToken` по-прежнему передаётся в `ConfirmAuthorization`, но отдельный запрос `UpdateDeviceToken` не выполняется. Real-time уведомления бота при этом могут приходить через SignalR, не меняя push-маршрут мобильного приложения.
 
 Пример заполненного `.env`:
 ```env
@@ -43,6 +46,7 @@ TELEGRAM_BOT_TOKEN=123456789:AAExampleTokenFromBotFather
 ALLOWED_TELEGRAM_USER_IDS=111111111,222222222
 ADMIN_TELEGRAM_USER_IDS=111111111
 DOMONAP_PHONE=+79991234567
+DOMONAP_REGISTER_DEVICE_TOKEN=false
 STORAGE_PATH=data/storage.db
 LOG_LEVEL=INFO
 CALL_WATCHER_ENABLED=true

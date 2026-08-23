@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     allowed_telegram_user_ids: list[int] = []
     admin_telegram_user_ids: list[int] = []
     domonap_phone: str = ""
+    domonap_register_device_token: bool = False
     storage_path: str = "data/storage.db"
     log_level: str = "INFO"
     call_watcher_enabled: bool = True
