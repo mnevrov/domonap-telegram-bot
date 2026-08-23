@@ -188,9 +188,8 @@ class DomonapSignalRTransport:
                     if await self._refresh_callback():
                         continue
                 if not 200 <= response.status < 300:
-                    body = (await response.text())[:500]
                     raise SignalRConnectionError(
-                        f"SignalR negotiate failed with HTTP {response.status}: {body}"
+                        f"SignalR negotiate failed with HTTP {response.status}"
                     )
                 try:
                     data = await response.json(content_type=None)
