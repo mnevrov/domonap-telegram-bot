@@ -26,6 +26,14 @@ async def edit_caption(message: Message, view: View) -> None:
     await message.edit_caption(caption=view.text, reply_markup=view.keyboard)
 
 
+async def edit_view(message: Message, view: View) -> None:
+    """Edit text or caption according to the actual Telegram message shape."""
+    if isinstance(message.caption, str):
+        await edit_caption(message, view)
+    else:
+        await edit_text(message, view)
+
+
 async def edit_markup(
     message: Message,
     keyboard: InlineKeyboardMarkup | None,
