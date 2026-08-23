@@ -82,19 +82,29 @@ class DomonapSignalRTransport:
         self._ws = None
         self._session = None
 
+    async def listen_once(self) -> AsyncIterator[IncomingCallPayload]:
+        """Run one hub session, retrying only an authentication handshake once."""
+        self._stop_event.clear()
+        for attempt in range(2):
+            try:
+                async for payload in self._connect_once():
+                    yield payload
+                return
+            except aiohttp.WSServerHandshakeError as exc:
+                if exc.status == 401 and attempt == 0 and await self._refresh_callback():
+                    continue
+                raise
+
     async def listen(self) -> AsyncIterator[IncomingCallPayload]:
         """Yield incoming-call pushes, reconnecting when the hub connection drops."""
         self._stop_event.clear()
         while not self._stop_event.is_set():
             try:
-                async for payload in self._connect_once():
+                async for payload in self.listen_once():
                     yield payload
             except asyncio.CancelledError:
                 raise
             except aiohttp.WSServerHandshakeError as exc:
-                if exc.status == 401 and await self._refresh_callback():
-                    self._reconnect_delay = 1.0
-                    continue
                 logger.warning("SignalR WebSocket handshake failed: HTTP %s", exc.status)
             except (aiohttp.ClientError, asyncio.TimeoutError, SignalRConnectionError) as exc:
                 logger.warning("SignalR connection failed: %s", exc)
@@ -115,11 +125,12 @@ class DomonapSignalRTransport:
 
         headers = self._signalr_headers(access_token)
         keepalive_task: asyncio.Task[None] | None = None
+        ws_timeout = aiohttp.ClientWSTimeout(ws_receive=self._server_timeout)
         try:
             async with session.ws_connect(
                 ws_url,
                 headers=headers,
-                receive_timeout=self._server_timeout,
+                timeout=ws_timeout,
             ) as ws:
                 self._ws = ws
                 self._reconnect_delay = 1.0
