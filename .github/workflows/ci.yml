@@ -34,3 +34,8 @@ jobs:
 
       - name: Build Docker image
         run: docker build --tag domonap-telegram-bot:ci .
+
+      - name: Validate Docker Compose
+        run: |
+          touch .env
+          docker compose config
