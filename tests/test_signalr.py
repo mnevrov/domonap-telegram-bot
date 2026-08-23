@@ -1,14 +1,19 @@
 import asyncio
 import json
+import logging
 from collections.abc import Callable
 
 import aiohttp
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from domonap_bot.domonap import signalr as signalr_module
 from domonap_bot.domonap.signalr import (
+    _MAX_WEBSOCKET_MESSAGE_SIZE,
     SIGNALR_USER_AGENT,
     DomonapSignalRTransport,
+    SignalRConnectionError,
     split_signalr_records,
 )
 
@@ -180,6 +185,40 @@ async def test_negotiate_401_refreshes_and_retries() -> None:
     assert negotiate_calls == 2
 
 
+async def test_oversized_websocket_message_is_rejected() -> None:
+    async def negotiate(request: web.Request) -> web.Response:
+        return web.json_response({"connectionToken": "connection-large"})
+
+    async def websocket(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive_str()
+        await ws.send_str("x" * (_MAX_WEBSOCKET_MESSAGE_SIZE + 1))
+        await asyncio.sleep(0.05)
+        return ws
+
+    app = web.Application()
+    app.router.add_post("/notificationHub/negotiate", negotiate)
+    app.router.add_get("/notificationHub", websocket)
+    server = await _start_server(app)
+
+    transport = DomonapSignalRTransport(
+        base_url=str(server.make_url("/")).rstrip("/"),
+        token_provider=lambda: "access",
+        refresh_callback=AsyncBoolCallback(False),
+        server_timeout=1.0,
+        session_factory=_unsafe_session_factory,
+    )
+    listener = transport.listen_once()
+    try:
+        with pytest.raises(SignalRConnectionError):
+            await asyncio.wait_for(anext(listener), timeout=2.0)
+    finally:
+        await listener.aclose()
+        await transport.close()
+        await server.close()
+
+
 def test_call_ended_clears_active_call_mapping() -> None:
     transport = DomonapSignalRTransport(
         base_url="https://api.domonap.ru",
@@ -196,3 +235,52 @@ def test_call_ended_clears_active_call_mapping() -> None:
     )
     assert ended is None
     assert transport._active_calls == {}
+
+
+def test_active_call_mapping_evicts_oldest_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signalr_module, "_MAX_ACTIVE_CALLS", 2)
+    transport = DomonapSignalRTransport(
+        base_url="https://api.domonap.ru",
+        token_provider=lambda: "access",
+        refresh_callback=AsyncBoolCallback(False),
+    )
+
+    assert transport._handle_record(_push_record(call_id="call-1", door_id="door-1"))
+    assert transport._handle_record(_push_record(call_id="call-2", door_id="door-2"))
+    assert transport._handle_record(_push_record(call_id="call-3", door_id="door-3"))
+
+    assert transport._active_calls == {"call-2": "door-2", "call-3": "door-3"}
+
+
+def test_invalid_push_log_does_not_include_raw_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = DomonapSignalRTransport(
+        base_url="https://api.domonap.ru",
+        token_provider=lambda: "access",
+        refresh_callback=AsyncBoolCallback(False),
+    )
+    secret_marker = "do-not-log-this-marker"
+    record = json.dumps(
+        {
+            "type": 1,
+            "target": "ReceivePush",
+            "arguments": [
+                "unused-0",
+                "unused-1",
+                {
+                    "EventMessage": "DomofonCalling",
+                    "CallId": ["invalid-type"],
+                    "DoorId": "door-1",
+                    "Address": {"invalid": secret_marker},
+                },
+            ],
+        }
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = transport._handle_record(record)
+
+    assert result is None
+    assert "Invalid Domonap incoming-call push schema" in caplog.text
+    assert secret_marker not in caplog.text
