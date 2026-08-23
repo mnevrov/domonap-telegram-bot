@@ -1,9 +1,15 @@
+import httpx
 import pytest
 import respx
 from httpx import Response
 
 from domonap_bot.domonap.client import DomonapClient
-from domonap_bot.domonap.exceptions import ApiError, SessionExpiredError, TokenExpiredError
+from domonap_bot.domonap.exceptions import (
+    ApiError,
+    NetworkError,
+    SessionExpiredError,
+    TokenExpiredError,
+)
 from domonap_bot.storage.base import Storage
 
 
@@ -138,6 +144,43 @@ class TestClientGetDoors:
             await client.get_doors()
 
 
+class TestClientResponseSemantics:
+    @respx.mock
+    async def test_bad_request_does_not_invalidate_session(self, client: DomonapClient) -> None:
+        respx.post("https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType").mock(
+            return_value=Response(400, json={"error": "bad request"})
+        )
+
+        with pytest.raises(ApiError):
+            await client.get_doors()
+
+        assert client.access_token == "test_access_token"
+        assert client.refresh_token == "test_refresh_token"
+        assert client._refresh_token_invalid is False
+
+    @respx.mock
+    async def test_forbidden_does_not_invalidate_session(self, client: DomonapClient) -> None:
+        respx.post("https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType").mock(
+            return_value=Response(403, json={"error": "forbidden"})
+        )
+
+        with pytest.raises(ApiError):
+            await client.get_doors()
+
+        assert client.access_token == "test_access_token"
+        assert client.refresh_token == "test_refresh_token"
+        assert client._refresh_token_invalid is False
+
+    @respx.mock
+    async def test_transport_error_is_mapped_to_network_error(self, client: DomonapClient) -> None:
+        respx.post("https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType").mock(
+            side_effect=httpx.ConnectError("boom")
+        )
+
+        with pytest.raises(NetworkError):
+            await client.get_doors()
+
+
 class TestSignalRReconnect:
     @respx.mock
     async def test_http_error_triggers_renegotiate_instead_of_terminating(
@@ -214,6 +257,23 @@ class TestClientOpenDoor:
             await client.open_door("door_1")
 
 
+class TestClientGetUserKey:
+    @respx.mock
+    async def test_error_null_is_success(self, client: DomonapClient) -> None:
+        respx.post("https://api.domonap.ru/client-api/Key/GetUserKey").mock(
+            return_value=Response(
+                200,
+                json={"id": "k1", "doorId": "d1", "name": "Door", "error": None},
+            )
+        )
+
+        key = await client.get_user_key("k1")
+
+        assert key is not None
+        assert key.id == "k1"
+        assert key.door_id == "d1"
+
+
 class TestClientSessionExpiry:
     @respx.mock
     async def test_expired_refresh_raises(self, client: DomonapClient) -> None:
@@ -245,6 +305,9 @@ class TestClientRefreshFailure:
 
         with pytest.raises(SessionExpiredError):
             await client.get_doors()
+        assert client.access_token is None
+        assert client.refresh_token is None
+        assert client._refresh_token_invalid is True
 
 
 class TestClientMarkSessionExpired:
