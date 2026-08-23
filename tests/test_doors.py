@@ -25,7 +25,7 @@ def _make_callback(user_id: int) -> MagicMock:
     cb.from_user = MagicMock(spec=User)
     cb.from_user.id = user_id
     cb.answer = AsyncMock()
-    cb.message = MagicMock(spec=CallbackQuery)
+    cb.message = MagicMock(spec=Message)
     cb.message.edit_text = AsyncMock()
     return cb
 
@@ -39,7 +39,7 @@ def _make_message(user_id: int) -> MagicMock:
 
 
 def _handlers(router: Router) -> dict[str, object]:
-    return {h.callback.__name__: h.callback for h in router.callback_query.handlers}
+    return {handler.callback.__name__: handler.callback for handler in router.callback_query.handlers}
 
 
 class TestDoorList:
@@ -47,45 +47,68 @@ class TestDoorList:
         router = Router()
         client = MagicMock()
         client.get_doors = AsyncMock(return_value=[])
-        access = AccessControl([1])
-        cooldown = CooldownManager()
-        register_door_handlers(router, client, access, cooldown)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
 
         cb = _make_callback(user_id=1)
         cb.data = "d:p:0"
-
         await router.callback_query.handlers[0].callback(cb)
 
         text = cb.message.edit_text.call_args[0][0]
-        assert "No doors" in text
+        assert "Доступных дверей нет" in text
         cb.answer.assert_awaited_once()
 
-    async def test_door_list_shows_doors(self) -> None:
+    async def test_door_list_shows_names_only_as_actions(self) -> None:
         router = Router()
         client = MagicMock()
         client.get_doors = AsyncMock(
             return_value=[
-                DoorKey(id="1", doorId="d1", name="Main"),
-                DoorKey(id="2", doorId="d2", name="Back"),
+                DoorKey(id="1", doorId="d1", name="Главный вход"),
+                DoorKey(id="2", doorId="d2", name="Калитка"),
             ]
         )
-        access = AccessControl([1])
-        cooldown = CooldownManager()
-        register_door_handlers(router, client, access, cooldown)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
 
         cb = _make_callback(user_id=1)
         cb.data = "d:p:0"
-
         await router.callback_query.handlers[0].callback(cb)
 
         text = cb.message.edit_text.call_args[0][0]
-        assert "Main" in text
-        assert "Back" in text
+        keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
+        assert "Выберите дверь" in text
+        assert "Главный вход" not in text
+        assert any(
+            button.text == "🚪 Главный вход"
+            for row in keyboard.inline_keyboard
+            for button in row
+        )
+
+    async def test_callback_acknowledges_before_loading_doors(self) -> None:
+        router = Router()
+        client = MagicMock()
+        events: list[str] = []
+
+        async def get_doors() -> list[DoorKey]:
+            events.append("api")
+            return []
+
+        client.get_doors = AsyncMock(side_effect=get_doors)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+
+        cb = _make_callback(user_id=1)
+
+        async def answer(*args: object, **kwargs: object) -> None:
+            events.append("ack")
+
+        cb.answer = AsyncMock(side_effect=answer)
+        cb.data = "d:p:0"
+        await router.callback_query.handlers[0].callback(cb)
+
+        assert events[:2] == ["ack", "api"]
 
 
 class TestDoorKeyboards:
     def test_callbacks_use_physical_door_id(self) -> None:
-        door = DoorKey(id="key-123", doorId="door-456", name="Main")
+        door = DoorKey(id="key-123", doorId="door-456", name="Главный вход")
 
         selection = door_selection_keyboard([door])
         listing = door_list_keyboard([door], page=0, total_pages=1)
@@ -94,6 +117,7 @@ class TestDoorKeyboards:
         assert selection.inline_keyboard[0][0].callback_data == "open:door-456"
         assert listing.inline_keyboard[0][0].callback_data == "d:det:door-456"
         assert detail.inline_keyboard[0][0].callback_data == "d:open:door-456"
+        assert detail.inline_keyboard[0][0].style == "success"
 
 
 class TestDoorDetail:
@@ -102,21 +126,22 @@ class TestDoorDetail:
         client = MagicMock()
         client.get_doors = AsyncMock(
             return_value=[
-                DoorKey(id="key-1", doorId="door-1", name="Main", domofonPublicPin="1234"),
+                DoorKey(
+                    id="key-1",
+                    doorId="door-1",
+                    name="Главный вход",
+                    domofonPublicPin="1234",
+                ),
             ]
         )
-        access = AccessControl([1])
-        cooldown = CooldownManager()
-        register_door_handlers(router, client, access, cooldown)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
 
         cb = _make_callback(user_id=1)
         cb.data = "d:det:door-1"
-
-        h = _handlers(router)
-        await h["callback_door_detail"](cb)
+        await _handlers(router)["callback_door_detail"](cb)
 
         text = cb.message.edit_text.call_args[0][0]
-        assert "Main" in text
+        assert "Главный вход" in text
         assert "PIN" in text
 
 
@@ -125,35 +150,27 @@ class TestDoorOpen:
         router = Router()
         client = MagicMock()
         client.open_door = AsyncMock(return_value=True)
-        access = AccessControl([1])
-        cooldown = CooldownManager()
-        register_door_handlers(router, client, access, cooldown)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
 
         cb = _make_callback(user_id=1)
         cb.data = "d:open:door123"
-
-        h = _handlers(router)
-        await h["callback_door_open"](cb)
+        await _handlers(router)["callback_door_open"](cb)
 
         client.open_door.assert_awaited_once_with("door123")
-        cb.message.edit_text.assert_awaited()
-        assert "✅" in cb.message.edit_text.call_args[0][0]
+        assert cb.answer.await_args.args[0] == "Открываю…"
+        assert "✅ Дверь открыта" in cb.message.edit_text.call_args[0][0]
 
     async def test_door_open_failure(self) -> None:
         router = Router()
         client = MagicMock()
         client.open_door = AsyncMock(return_value=False)
-        access = AccessControl([1])
-        cooldown = CooldownManager()
-        register_door_handlers(router, client, access, cooldown)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
 
         cb = _make_callback(user_id=1)
         cb.data = "d:open:door123"
+        await _handlers(router)["callback_door_open"](cb)
 
-        h = _handlers(router)
-        await h["callback_door_open"](cb)
-
-        assert "❌" in cb.message.edit_text.call_args[0][0]
+        assert "❌ Не удалось" in cb.message.edit_text.call_args[0][0]
 
     @respx.mock
     async def test_keyboard_to_handler_to_http_uses_door_id(self) -> None:
@@ -165,7 +182,7 @@ class TestDoorOpen:
         )
         client.set_tokens("access", "refresh", "2027-01-01T00:00:00+03:00")
 
-        door = DoorKey(id="key-123", doorId="door-456", name="Main")
+        door = DoorKey(id="key-123", doorId="door-456", name="Главный вход")
         callback_data = door_detail_keyboard(door).inline_keyboard[0][0].callback_data
         assert callback_data == "d:open:door-456"
 
@@ -174,9 +191,7 @@ class TestDoorOpen:
         )
 
         router = Router()
-        access = AccessControl([1])
-        cooldown = CooldownManager()
-        register_door_handlers(router, client, access, cooldown)
+        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
 
         cb = _make_callback(user_id=1)
         cb.data = callback_data
@@ -189,7 +204,7 @@ class TestDoorOpen:
 
 class TestAutoOpenDoor:
     async def test_single_door_command_uses_physical_door_id(self) -> None:
-        door = DoorKey(id="key-123", doorId="door-456", name="Main")
+        door = DoorKey(id="key-123", doorId="door-456", name="Главный вход")
         client = MagicMock()
         client.open_door = AsyncMock(return_value=True)
         cooldown = CooldownManager()
