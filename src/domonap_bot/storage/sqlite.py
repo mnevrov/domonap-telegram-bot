@@ -1,8 +1,37 @@
+import logging
+import os
 from pathlib import Path
 
 import aiosqlite
 
 from domonap_bot.storage.base import Storage
+
+logger = logging.getLogger(__name__)
+
+_PRIVATE_DIR_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+
+
+def _prepare_storage_path(db_path: Path) -> None:
+    parent = db_path.parent
+    parent_existed = parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+
+    if os.name != "posix":
+        return
+
+    try:
+        if not parent_existed:
+            parent.chmod(_PRIVATE_DIR_MODE)
+
+        flags = os.O_WRONLY | os.O_CREAT
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        fd = os.open(db_path, flags, _PRIVATE_FILE_MODE)
+        os.close(fd)
+        db_path.chmod(_PRIVATE_FILE_MODE)
+    except OSError as exc:
+        logger.warning("Could not harden SQLite storage permissions for %s: %s", db_path, exc)
 
 
 class SqliteStorage(Storage):
@@ -11,7 +40,7 @@ class SqliteStorage(Storage):
         self._conn: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_storage_path(self._db_path)
         self._conn = await aiosqlite.connect(str(self._db_path))
         await self._conn.execute(
             "CREATE TABLE IF NOT EXISTS kv_store ("
