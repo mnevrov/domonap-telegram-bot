@@ -27,6 +27,11 @@ def _parse_telegram_user_id(value: str) -> int | None:
     return user_id if user_id > 0 else None
 
 
+def _expire_pending_removal(admin_id: int, user_id: int) -> None:
+    if _pending_removals.get(admin_id) == user_id:
+        _pending_removals.pop(admin_id, None)
+
+
 def register_admin_handlers(
     router: Router,
     client: DomonapClient,
@@ -200,7 +205,7 @@ def register_admin_handlers(
         if pending != uid:
             _pending_removals[admin_id] = uid
             asyncio.get_event_loop().call_later(
-                10, lambda: _pending_removals.pop(admin_id, None)
+                10, lambda: _expire_pending_removal(admin_id, uid)
             )
             await callback.answer(f"Tap again to confirm remove user {uid}", show_alert=True)
             return
