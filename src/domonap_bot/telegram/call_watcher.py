@@ -2,11 +2,12 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from typing import Any, Protocol
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from domonap_bot.config import Settings
@@ -21,6 +22,9 @@ _MAX_SEEN_IDS = 1000
 _POLL_INTERVAL = 5.0
 _SIGNALR_RETRY_INTERVAL = 300.0
 _DOOR_MAP_TTL = 300.0
+_NOTIFICATION_MAX_ATTEMPTS = 3
+_NOTIFICATION_RETRY_BASE_DELAY = 0.5
+_NOTIFICATION_MAX_RETRY_AFTER = 5.0
 
 
 class CallEventSource(Protocol):
@@ -245,6 +249,54 @@ class CallWatcher:
             return None
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    @staticmethod
+    def _notification_retry_delay(exc: Exception, attempt: int) -> float | None:
+        if isinstance(exc, TelegramRetryAfter):
+            retry_after = float(exc.retry_after)
+            if retry_after > _NOTIFICATION_MAX_RETRY_AFTER:
+                return None
+            return max(0.0, retry_after)
+        if isinstance(exc, (TelegramNetworkError, TelegramServerError)):
+            return float(_NOTIFICATION_RETRY_BASE_DELAY * (2**attempt))
+        return None
+
+    async def _send_with_retry(
+        self,
+        send: Callable[[], Awaitable[Any]],
+        *,
+        user_id: int,
+        kind: str,
+    ) -> bool:
+        for attempt in range(_NOTIFICATION_MAX_ATTEMPTS):
+            try:
+                await send()
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                final_attempt = attempt + 1 >= _NOTIFICATION_MAX_ATTEMPTS
+                delay = None if final_attempt else self._notification_retry_delay(exc, attempt)
+                if delay is None:
+                    logger.warning(
+                        "Failed to send %s notification to user %s: %s",
+                        kind,
+                        user_id,
+                        exc,
+                    )
+                    return False
+                logger.warning(
+                    "Transient Telegram error sending %s to user %s; retrying in %.1fs "
+                    "(attempt %s/%s): %s",
+                    kind,
+                    user_id,
+                    delay,
+                    attempt + 1,
+                    _NOTIFICATION_MAX_ATTEMPTS,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+        return False
+
     async def _send_notification(
         self,
         user_ids: list[int],
@@ -257,22 +309,39 @@ class CallWatcher:
         kb = self._build_keyboard(door_id=door_id, video_url=video_url, call_id=call_id)
 
         for uid in user_ids:
-            try:
-                if photo_url:
-                    await self._bot.send_photo(
+            if photo_url:
+                async def send_photo() -> Any:
+                    return await self._bot.send_photo(
                         chat_id=uid,
                         photo=photo_url,
                         caption=text,
                         reply_markup=kb,
                     )
-                else:
-                    await self._bot.send_message(
-                        chat_id=uid,
-                        text=text,
-                        reply_markup=kb,
-                    )
-            except Exception as exc:
-                logger.warning("Failed to send notification to user %s: %s", uid, exc)
+
+                photo_sent = await self._send_with_retry(
+                    send_photo,
+                    user_id=uid,
+                    kind="photo",
+                )
+                if photo_sent:
+                    continue
+                logger.warning(
+                    "Falling back to text notification for user %s after photo delivery failed",
+                    uid,
+                )
+
+            async def send_text() -> Any:
+                return await self._bot.send_message(
+                    chat_id=uid,
+                    text=text,
+                    reply_markup=kb,
+                )
+
+            await self._send_with_retry(
+                send_text,
+                user_id=uid,
+                kind="text",
+            )
 
     def get_seen_ids_count(self) -> int:
         return len(self._seen_ids)
