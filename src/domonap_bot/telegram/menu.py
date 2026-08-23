@@ -10,7 +10,7 @@ from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text, send_view
-from domonap_bot.telegram.ui.views import home_view
+from domonap_bot.telegram.ui.views import View, home_view
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def register_menu_handlers(
 ) -> None:
     del storage, cooldown
 
-    def current_home(user_id: int):
+    def current_home(user_id: int) -> View:
         return home_view(
             authorized=bool(client.access_token or client.refresh_token),
             is_admin=admin_access.is_allowed(user_id),
