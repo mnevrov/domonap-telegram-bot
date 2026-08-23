@@ -9,7 +9,7 @@ from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.health import clear_heartbeat, run_heartbeat
 from domonap_bot.logging_config import setup_logging
 from domonap_bot.storage.sqlite import SqliteStorage
-from domonap_bot.storage.tokens import TokenStorage
+from domonap_bot.storage.tokens import TokenStorage, TokenStorageEncryptionError
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.bot import build_bot
 from domonap_bot.telegram.call_watcher import CallWatcher
@@ -52,6 +52,18 @@ async def main() -> None:
         )
         return
 
+    storage_encryption_key = (
+        settings.storage_encryption_key.get_secret_value().strip()
+        if settings.storage_encryption_key is not None
+        else ""
+    )
+    if not storage_encryption_key:
+        logger.error(
+            "STORAGE_ENCRYPTION_KEY is empty — refusing to start. "
+            "Generate a Fernet key and store it separately from the SQLite database."
+        )
+        return
+
     storage = SqliteStorage(settings.storage_path_resolved)
     client: DomonapClient | None = None
     bot: Bot | None = None
@@ -61,13 +73,22 @@ async def main() -> None:
     try:
         await storage.initialize()
 
-        token_storage = TokenStorage(storage)
+        try:
+            token_storage = TokenStorage(storage, encryption_key=storage_encryption_key)
+        except ValueError as exc:
+            logger.error("Invalid storage encryption key: %s", exc)
+            return
+
         client = DomonapClient(
             token_storage,
             phone=settings.domonap_phone,
             register_device_token=settings.domonap_register_device_token,
         )
-        restored = await client.hydrate_from_storage()
+        try:
+            restored = await client.hydrate_from_storage()
+        except TokenStorageEncryptionError as exc:
+            logger.error("Cannot restore encrypted Domonap session: %s", exc)
+            return
         logger.info("Session restored from storage: %s", restored)
         logger.info(
             "Domonap device-token registration: %s",

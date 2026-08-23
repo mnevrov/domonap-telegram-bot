@@ -27,8 +27,17 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 | `DOMONAP_PHONE` | Your Domonap account phone number |
 | `DOMONAP_REGISTER_DEVICE_TOKEN` | Call `UpdateDeviceToken` after SMS authorization. Default: `false` to preserve official-app push routing |
 | `STORAGE_PATH` | Path to SQLite database file (default: `data/storage.db`) |
+| `STORAGE_ENCRYPTION_KEY` | **Required.** Fernet key used to encrypt the persisted Domonap session |
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO) |
 | `CALL_WATCHER_ENABLED` | Enable incoming call notifications (default: true) |
+
+Generate the storage key once:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Store that value in `STORAGE_ENCRYPTION_KEY`. Keep the key outside the repository and separately from database backups. Losing the key makes an encrypted saved Domonap session unreadable; using a different key causes startup to fail closed rather than silently discarding the session.
 
 > ⚠️ **Fail-closed access:** `ALLOWED_TELEGRAM_USER_IDS` must contain at least one
 > Telegram user ID. If it is empty, the application refuses to start; an empty list
@@ -114,7 +123,7 @@ Authorization uses Domonap's SMS-based flow:
 3. Send `/code <sms_code>`. The message containing the code is automatically deleted when possible.
 4. Use `/status` to verify the connection.
 
-Tokens are stored in SQLite (`data/storage.db` by default) and refreshed automatically when needed. Use `/logout` to clear them.
+Domonap session values are stored in SQLite (`data/storage.db` by default) and encrypted with authenticated Fernet encryption using `STORAGE_ENCRYPTION_KEY`. Existing plaintext session fields from older versions are transparently encrypted on the first successful startup with a configured key. ACL records are not secrets and remain ordinary SQLite values. Use `/logout` to clear the persisted Domonap session.
 
 > ⚠️ SMS codes and tokens are not intentionally written by the bot to application logs.
 > `LOG_LEVEL=DEBUG` enables debug output for application code, while sensitive third-party
