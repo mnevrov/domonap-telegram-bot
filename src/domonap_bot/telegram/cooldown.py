@@ -16,10 +16,11 @@ class CooldownManager:
 
     def set(self, user_id: int, action_id: str) -> None:
         key = (user_id, action_id)
-        self.clear_expired()
         if key not in self._cooldowns and len(self._cooldowns) >= _MAX_COOLDOWN_ENTRIES:
-            oldest = min(self._cooldowns, key=self._cooldowns.__getitem__)
-            del self._cooldowns[oldest]
+            self.clear_expired()
+            if len(self._cooldowns) >= _MAX_COOLDOWN_ENTRIES:
+                oldest = min(self._cooldowns, key=self._cooldowns.__getitem__)
+                del self._cooldowns[oldest]
         self._cooldowns[key] = monotonic()
 
     def remaining(self, user_id: int, action_id: str) -> float:
