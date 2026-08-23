@@ -17,6 +17,7 @@ async def build_bot(
     settings: Settings,
     client: DomonapClient,
     storage: Storage | None = None,
+    access: AccessControl | None = None,
 ) -> tuple[Bot, Dispatcher]:
     session = AiohttpSession()
     session.timeout = 120
@@ -24,7 +25,7 @@ async def build_bot(
     dp = Dispatcher()
     router = Router()
 
-    access = AccessControl(settings.allowed_telegram_user_ids)
+    runtime_access = access or AccessControl(settings.allowed_telegram_user_ids)
     admin_access = AccessControl(
         settings.admin_telegram_user_ids,
         default_allow=False,
@@ -33,19 +34,19 @@ async def build_bot(
     if storage is not None:
         stored_users = await storage.list_allowed_users()
         for uid in stored_users:
-            access.add_user(uid)
+            runtime_access.add_user(uid)
             if await storage.is_user_admin(uid):
                 admin_access.add_user(uid)
 
     cooldown = CooldownManager()
-    register_handlers(router, client, access, admin_access, cooldown)
+    register_handlers(router, client, runtime_access, admin_access, cooldown)
 
     if storage is not None:
-        register_menu_handlers(router, client, storage, access, admin_access, cooldown)
-        register_admin_handlers(router, client, storage, admin_access, access)
+        register_menu_handlers(router, client, storage, runtime_access, admin_access, cooldown)
+        register_admin_handlers(router, client, storage, admin_access, runtime_access)
 
-    register_door_handlers(router, client, access, cooldown)
-    register_call_handlers(router, client, access, cooldown)
+    register_door_handlers(router, client, runtime_access, cooldown)
+    register_call_handlers(router, client, runtime_access, cooldown)
 
     dp.include_router(router)
     return bot, dp
