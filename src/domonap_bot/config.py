@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def _parse_user_ids(v: Any) -> list[int]:
     if isinstance(v, list):
-        return v
+        return [int(item) for item in v]
     if isinstance(v, (int, float)):
         return [int(v)]
     if isinstance(v, str):
@@ -18,7 +18,10 @@ def _parse_user_ids(v: Any) -> list[int]:
         if not v:
             return []
         if v.startswith("[") and v.endswith("]"):
-            return json.loads(v)
+            parsed = json.loads(v)
+            if not isinstance(parsed, list):
+                return []
+            return [int(item) for item in parsed]
         return [int(x.strip()) for x in v.split(",") if x.strip()]
     return []
 

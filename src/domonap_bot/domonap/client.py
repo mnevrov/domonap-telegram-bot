@@ -66,6 +66,12 @@ def _phone_digits(phone: str) -> tuple[str, str]:
     return "7", digits
 
 
+def _has_api_error(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("error") not in (None, "", False)
+
+
 def _parse_dt(val: str) -> datetime | None:
     fmts = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
     for fmt in fmts:
@@ -92,6 +98,8 @@ class DomonapClient:
         self._token_storage = token_storage
         self._phone = phone
 
+        self._device_token_explicit = device_token is not None
+        self._instance_id_explicit = instance_id is not None
         self._device_token = device_token or _generate_unique_android_guid()
         self._instance_id = instance_id or _generate_unique_android_guid()
 
@@ -170,6 +178,11 @@ class DomonapClient:
         )
         if not self._phone and session.phone:
             self._phone = session.phone
+        if session.device_token and not self._device_token_explicit:
+            self._device_token = session.device_token
+        if session.instance_id and not self._instance_id_explicit:
+            self._instance_id = session.instance_id
+            self._http.headers["instanceId"] = _with_suffix(session.instance_id)
         return True
 
     def _now_utc(self) -> datetime:
@@ -223,6 +236,7 @@ class DomonapClient:
         need_auth: bool = False,
         expect_text: bool = False,
         retry_on_401: bool = True,
+        session_rejection_statuses: tuple[int, ...] = (),
     ) -> dict[str, Any] | str:
         if self._refresh_token_invalid and need_auth:
             raise SessionExpiredError("Session expired")
@@ -243,9 +257,16 @@ class DomonapClient:
                 headers["Content-Type"] = "application/json; charset=UTF-8"
             if need_auth and self.access_token:
                 headers["Authorization"] = f"Bearer {self.access_token}"
-            return await self._http.request(
-                method, url, json=payload, headers=headers,
-            )
+            try:
+                return await self._http.request(
+                    method, url, json=payload, headers=headers,
+                )
+            except httpx.TimeoutException as exc:
+                raise NetworkError("Request timed out") from exc
+            except httpx.ConnectError as exc:
+                raise NetworkError("Connection failed") from exc
+            except httpx.HTTPError as exc:
+                raise NetworkError(f"HTTP transport error: {exc}") from exc
 
         resp = await _do()
 
@@ -260,15 +281,30 @@ class DomonapClient:
         if resp.is_success:
             if expect_text:
                 return resp.text
-            data: dict[str, Any] = resp.json()
+            try:
+                parsed = resp.json()
+            except ValueError as exc:
+                raise ApiError(
+                    f"Invalid JSON response from {path}: {resp.text[:500]}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ApiError(
+                    f"Unexpected JSON response from {path}: {type(parsed).__name__}"
+                )
+            data: dict[str, Any] = parsed
             return data
 
         body = resp.text[:2000]
-        if resp.status_code in (400, 401, 403):
+        if resp.status_code in session_rejection_statuses:
             self._invalidate_refresh(f"token rejected with HTTP {resp.status_code}")
             raise SessionExpiredError(
                 f"HTTP {resp.status_code}: {body}"
             )
+
+        if resp.status_code == 401:
+            if self._refresh_token_invalid:
+                raise SessionExpiredError(f"HTTP 401: {body}")
+            raise TokenExpiredError(f"HTTP 401: {body}")
 
         raise ApiError(f"HTTP {resp.status_code}: {body}")
 
@@ -289,7 +325,7 @@ class DomonapClient:
             try:
                 await self._perform_token_refresh()
                 return True
-            except (ApiError, NetworkError, SessionExpiredError):
+            except SessionExpiredError:
                 return False
 
     async def _perform_token_refresh(self) -> None:
@@ -301,6 +337,7 @@ class DomonapClient:
             payload={"refreshToken": self.refresh_token},
             need_auth=False,
             retry_on_401=False,
+            session_rejection_statuses=(400, 401, 403),
         )
         if isinstance(data, str):
             raise ApiError(f"Unexpected text response on refresh: {data}")
@@ -450,7 +487,7 @@ class DomonapClient:
             payload=payload,
             need_auth=True,
         )
-        if isinstance(data, str) or "error" in data:
+        if isinstance(data, str) or _has_api_error(data):
             return None
         key = DoorKey.model_validate(data)
         key.raw = data

@@ -2,32 +2,38 @@ import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from domonap_bot.domonap.client import DomonapClient
-from domonap_bot.storage.sqlite import SqliteStorage
+from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
+
 async def _render(
     target: Message | CallbackQuery,
     text: str,
-    kb,
+    kb: InlineKeyboardMarkup,
 ) -> None:
-    if isinstance(target, CallbackQuery) and target.message:
-        await target.message.edit_text(text, reply_markup=kb)
+    if isinstance(target, CallbackQuery):
+        message = editable_callback_message(target)
+        if message is None:
+            await target.answer("Message unavailable", show_alert=True)
+            return
+        await message.edit_text(text, reply_markup=kb)
         await target.answer()
-    elif isinstance(target, Message):
+    else:
         await target.answer(text, reply_markup=kb)
 
 
 def register_menu_handlers(
     router: Router,
     client: DomonapClient,
-    storage: SqliteStorage,
+    storage: Storage,
     access: AccessControl,
     admin_access: AccessControl,
     cooldown: CooldownManager,

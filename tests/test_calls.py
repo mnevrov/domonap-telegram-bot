@@ -1,7 +1,6 @@
-from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram import Router
 from aiogram.types import CallbackQuery, User
 

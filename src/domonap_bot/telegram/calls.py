@@ -6,9 +6,9 @@ from aiogram.types import CallbackQuery
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import back_keyboard, call_list_keyboard, call_detail_keyboard
-
+from domonap_bot.telegram.keyboards import back_keyboard, call_detail_keyboard, call_list_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,16 @@ def register_call_handlers(
     @router.callback_query(F.data.startswith("c:p:"))
     @access.require_access
     async def callback_call_list(callback: CallbackQuery) -> None:
-        page_str = callback.data.removeprefix("c:p:")
+        data = callback.data
+        if not data:
+            await callback.answer("Invalid data", show_alert=True)
+            return
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer("Message unavailable", show_alert=True)
+            return
+
+        page_str = data.removeprefix("c:p:")
         try:
             page = int(page_str)
         except ValueError:
@@ -42,7 +51,9 @@ def register_call_handlers(
                 missed_calls=filter_missed,
             )
         except DomonapError:
-            await callback.message.edit_text("Failed to load call logs.", reply_markup=back_keyboard("m:main"))
+            await message.edit_text(
+                "Failed to load call logs.", reply_markup=back_keyboard("m:main")
+            )
             await callback.answer()
             return
 
@@ -55,7 +66,9 @@ def register_call_handlers(
                     missed_calls=filter_missed,
                 )
             except DomonapError:
-                await callback.message.edit_text("Failed to load call logs.", reply_markup=back_keyboard("m:main"))
+                await message.edit_text(
+                    "Failed to load call logs.", reply_markup=back_keyboard("m:main")
+                )
                 await callback.answer()
                 return
 
@@ -69,65 +82,81 @@ def register_call_handlers(
         except Exception:
             pass
 
-        text = f"📞 Calls\n─────────────────────\n"
+        text = "📞 Calls\n─────────────────────\n"
         text += f"Filter: {'Missed' if filter_missed else 'All'}\n\n"
 
         if not entries:
             text += "No calls found."
         else:
-            for e in entries:
-                status = "❌" if not e.answered else "✅"
-                name = door_map.get(e.door_id or "", e.caller or e.call_id[:8])
-                time_str = e.call_time.strftime("%H:%M") if e.call_time else "??"
+            for entry in entries:
+                status = "❌" if not entry.answered else "✅"
+                name = door_map.get(
+                    entry.door_id or "", entry.caller or entry.call_id[:8]
+                )
+                time_str = entry.call_time.strftime("%H:%M") if entry.call_time else "??"
                 text += f"\n{status} {name} — {time_str}"
 
-        kb = call_list_keyboard(entries, page, max(1, page + (1 if has_more else 0)), filter_missed)
-        await callback.message.edit_text(text, reply_markup=kb)
+        max_page = max(1, page + (1 if has_more else 0))
+        kb = call_list_keyboard(entries, page, max_page, filter_missed)
+        await message.edit_text(text, reply_markup=kb)
         await callback.answer()
 
     @router.callback_query(F.data.startswith("c:f:"))
     @access.require_access
     async def callback_call_filter(callback: CallbackQuery) -> None:
+        data = callback.data
+        if not data:
+            await callback.answer("Invalid data", show_alert=True)
+            return
         uid = callback.from_user.id if callback.from_user else 0
-        mode = callback.data.removeprefix("c:f:")
+        mode = data.removeprefix("c:f:")
         user_call_filter[uid] = mode == "missed"
 
-        # Re-render list on page 0
-        cb = callback
-        cb.data = "c:p:0"
-        # Re-dispatch to the list handler
-        await callback_call_list(cb)
+        # Re-render list on page 0.
+        callback.data = "c:p:0"
+        await callback_call_list(callback)
 
     @router.callback_query(F.data.startswith("c:det:"))
     @access.require_access
     async def callback_call_detail(callback: CallbackQuery) -> None:
-        call_id = callback.data.removeprefix("c:det:")
+        data = callback.data
+        if not data:
+            await callback.answer("Invalid data", show_alert=True)
+            return
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer("Message unavailable", show_alert=True)
+            return
+        call_id = data.removeprefix("c:det:")
 
         try:
             entries = await client.get_call_logs(per_page=50, missed_calls=False)
         except DomonapError:
-            await callback.message.edit_text("Failed to load call details.", reply_markup=back_keyboard("c:p:0"))
+            await message.edit_text(
+                "Failed to load call details.", reply_markup=back_keyboard("c:p:0")
+            )
             await callback.answer()
             return
 
-        entry = next((e for e in entries if e.call_id == call_id), None)
+        entry = next((item for item in entries if item.call_id == call_id), None)
         if not entry:
-            await callback.message.edit_text("Call not found.", reply_markup=back_keyboard("c:p:0"))
+            await message.edit_text("Call not found.", reply_markup=back_keyboard("c:p:0"))
             await callback.answer()
             return
 
         door_info_map: dict[str, tuple[str, str | None]] = {}
         try:
             doors = await client.get_doors()
-            for d in doors:
-                key = d.door_id or d.id
-                url = d.http_video_url or d.webrtc_video_url
-                door_info_map[d.door_id] = (d.name, url)
-                door_info_map[d.id] = (d.name, url)
+            for door in doors:
+                url = door.http_video_url or door.webrtc_video_url
+                door_info_map[door.door_id] = (door.name, url)
+                door_info_map[door.id] = (door.name, url)
         except Exception:
             pass
 
-        door_name, video_url = door_info_map.get(entry.door_id or "", (entry.caller or "", None))
+        door_name, video_url = door_info_map.get(
+            entry.door_id or "", (entry.caller or "", None)
+        )
 
         parts = [
             "📞 Call Details",
@@ -142,14 +171,14 @@ def register_call_handlers(
 
         if entry.photo_url:
             try:
-                await callback.message.delete()
-                await callback.message.answer_photo(
+                await message.delete()
+                await message.answer_photo(
                     photo=entry.photo_url,
                     caption=text,
                     reply_markup=kb,
                 )
             except Exception:
-                await callback.message.edit_text(text, reply_markup=kb)
+                await message.edit_text(text, reply_markup=kb)
         else:
-            await callback.message.edit_text(text, reply_markup=kb)
+            await message.edit_text(text, reply_markup=kb)
         await callback.answer()
