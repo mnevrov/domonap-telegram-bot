@@ -60,6 +60,20 @@ class CallLogEntry(BaseModel):
         return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
 
 
+class CallLogPage(BaseModel):
+    entries: list[CallLogEntry] = []
+    current_page: int = 1
+    per_page: int = 20
+    total: int = 0
+
+    @property
+    def total_pages(self) -> int:
+        if self.total <= 0:
+            return 1
+        page_size = max(1, self.per_page)
+        return max(1, (self.total + page_size - 1) // page_size)
+
+
 class IncomingCallPayload(BaseModel):
     call_id: str = Field(alias="CallId")
     door_id: str | None = Field(default=None, alias="DoorId")

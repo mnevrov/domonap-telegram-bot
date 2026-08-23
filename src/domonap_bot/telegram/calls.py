@@ -37,7 +37,7 @@ def register_call_handlers(
 
         page_str = data.removeprefix("c:p:")
         try:
-            page = int(page_str)
+            page = max(0, int(page_str))
         except ValueError:
             page = 0
 
@@ -45,11 +45,19 @@ def register_call_handlers(
         filter_missed = user_call_filter.get(uid, False)
 
         try:
-            entries = await client.get_call_logs(
+            page_data = await client.get_call_logs_page(
                 per_page=_PER_PAGE,
                 current_page=page + 1,
                 missed_calls=filter_missed,
             )
+            total_pages = page_data.total_pages
+            if page >= total_pages:
+                page = total_pages - 1
+                page_data = await client.get_call_logs_page(
+                    per_page=_PER_PAGE,
+                    current_page=page + 1,
+                    missed_calls=filter_missed,
+                )
         except DomonapError:
             await message.edit_text(
                 "Failed to load call logs.", reply_markup=back_keyboard("m:main")
@@ -57,22 +65,8 @@ def register_call_handlers(
             await callback.answer()
             return
 
-        if not entries and page > 0:
-            page = 0
-            try:
-                entries = await client.get_call_logs(
-                    per_page=_PER_PAGE,
-                    current_page=1,
-                    missed_calls=filter_missed,
-                )
-            except DomonapError:
-                await message.edit_text(
-                    "Failed to load call logs.", reply_markup=back_keyboard("m:main")
-                )
-                await callback.answer()
-                return
-
-        has_more = len(entries) >= _PER_PAGE
+        entries = page_data.entries
+        total_pages = page_data.total_pages
 
         door_map: dict[str, str] = {}
         try:
@@ -96,8 +90,7 @@ def register_call_handlers(
                 time_str = entry.call_time.strftime("%H:%M") if entry.call_time else "??"
                 text += f"\n{status} {name} — {time_str}"
 
-        max_page = max(1, page + (1 if has_more else 0))
-        kb = call_list_keyboard(entries, page, max_page, filter_missed)
+        kb = call_list_keyboard(entries, page, total_pages, filter_missed)
         await message.edit_text(text, reply_markup=kb)
         await callback.answer()
 
@@ -130,7 +123,7 @@ def register_call_handlers(
         call_id = data.removeprefix("c:det:")
 
         try:
-            entries = await client.get_call_logs(per_page=50, missed_calls=False)
+            entry = await client.find_call_log(call_id)
         except DomonapError:
             await message.edit_text(
                 "Failed to load call details.", reply_markup=back_keyboard("c:p:0")
@@ -138,7 +131,6 @@ def register_call_handlers(
             await callback.answer()
             return
 
-        entry = next((item for item in entries if item.call_id == call_id), None)
         if not entry:
             await message.edit_text("Call not found.", reply_markup=back_keyboard("c:p:0"))
             await callback.answer()

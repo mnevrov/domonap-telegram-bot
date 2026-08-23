@@ -20,6 +20,7 @@ from domonap_bot.domonap.exceptions import (
 from domonap_bot.domonap.models import (
     AuthSession,
     CallLogEntry,
+    CallLogPage,
     DoorKey,
     IncomingCallPayload,
     PagedResponse,
@@ -34,6 +35,7 @@ DEFAULT_USER_AGENT = "okhttp/5.3.2"
 DEFAULT_DEVICE_PLATFORM = "Android"
 DEFAULT_DOM_APP = "mobile"
 _ANDROID_GUID_RETRY_LIMIT = 8
+_MAX_CALL_LOG_PAGES = 100
 _generated_android_guids: set[str] = set()
 
 
@@ -530,12 +532,12 @@ class DomonapClient:
 
     # --- Call logs ---
 
-    async def get_call_logs(
+    async def get_call_logs_page(
         self,
         per_page: int = 20,
         current_page: int = 1,
         missed_calls: bool = False,
-    ) -> list[CallLogEntry]:
+    ) -> CallLogPage:
         payload = {
             "currentPage": current_page,
             "perPage": per_page,
@@ -549,13 +551,61 @@ class DomonapClient:
         )
         if isinstance(data, str):
             raise ApiError(f"Unexpected text response: {data}")
-        results = data.get("results", [])
+
         entries: list[CallLogEntry] = []
-        for item in results:
+        for item in data.get("results", []):
             entry = CallLogEntry.model_validate(item)
             entry.raw = item
             entries.append(entry)
-        return entries
+
+        return CallLogPage(
+            entries=entries,
+            current_page=data.get("currentPage", current_page),
+            per_page=data.get("perPage", per_page),
+            total=data.get("total", 0),
+        )
+
+    async def get_call_logs(
+        self,
+        per_page: int = 20,
+        current_page: int = 1,
+        missed_calls: bool = False,
+    ) -> list[CallLogEntry]:
+        page = await self.get_call_logs_page(
+            per_page=per_page,
+            current_page=current_page,
+            missed_calls=missed_calls,
+        )
+        return page.entries
+
+    async def find_call_log(
+        self,
+        call_id: str,
+        *,
+        per_page: int = 50,
+        max_pages: int = _MAX_CALL_LOG_PAGES,
+    ) -> CallLogEntry | None:
+        current_page = 1
+        for _ in range(max_pages):
+            page = await self.get_call_logs_page(
+                per_page=per_page,
+                current_page=current_page,
+                missed_calls=False,
+            )
+            entry = next((item for item in page.entries if item.call_id == call_id), None)
+            if entry is not None:
+                return entry
+
+            if current_page >= page.total_pages:
+                return None
+            current_page += 1
+
+        logger.warning(
+            "Stopped call-log lookup at safety limit: call_id=%s pages=%s",
+            call_id,
+            max_pages,
+        )
+        return None
 
     # --- Calls ---
 
