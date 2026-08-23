@@ -4,4 +4,13 @@ services:
     env_file: ".env"
     volumes:
       - "./data:/app/data"
+    tmpfs:
+      - "/tmp:size=16m,mode=1777"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    stop_grace_period: 30s
     restart: unless-stopped
