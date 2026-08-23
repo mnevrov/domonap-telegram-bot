@@ -2,14 +2,14 @@ import asyncio
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from domonap_bot.domonap.client import DomonapClient
-from domonap_bot.domonap.exceptions import DomonapError, NetworkError
 from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.auth_flow import request_sms_code
 from domonap_bot.telegram.callback_utils import editable_callback_message
-from domonap_bot.telegram.errors import describe_error
 from domonap_bot.telegram.invites import InviteManager
 from domonap_bot.telegram.keyboards import (
     admin_panel_keyboard,
@@ -260,56 +260,23 @@ def register_admin_handlers(
 
     @router.callback_query(F.data == "a:auth")
     @admin_access.require_access
-    async def callback_admin_auth(callback: CallbackQuery) -> None:
+    async def callback_admin_auth(callback: CallbackQuery, state: FSMContext) -> None:
         message = editable_callback_message(callback)
         if message is None:
             await callback.answer("Сообщение недоступно", show_alert=True)
             return
-        phone = client.phone
-        if not phone:
-            await callback.answer()
-            await message.edit_text(
-                "Номер телефона Domonap не настроен.",
-                reply_markup=back_keyboard("a:panel"),
-            )
-            return
         await callback.answer("Запрашиваю SMS…")
-        try:
-            success = await client.login(phone)
-        except NetworkError:
-            await message.edit_text(
-                "Сеть недоступна. Повторите позже.",
-                reply_markup=back_keyboard("a:panel"),
-            )
-            return
-        except DomonapError as exc:
-            await message.edit_text(
-                describe_error(exc),
-                reply_markup=back_keyboard("a:panel"),
-            )
-            return
-        if success:
-            digits = "".join(char for char in phone if char.isdigit())
-            masked = digits[:3] + "***" + digits[-2:] if len(digits) >= 4 else digits
-            if phone.startswith("+"):
-                masked = f"+{masked}"
-            await message.edit_text(
-                f"SMS отправлена на {masked}. Введите код командой /code <код>.",
-                reply_markup=back_keyboard("a:panel"),
-            )
-        else:
-            await message.edit_text(
-                "Не удалось запросить SMS.", reply_markup=back_keyboard("a:panel")
-            )
+        await request_sms_code(message, client, state)
 
     @router.callback_query(F.data == "a:logout")
     @admin_access.require_access
-    async def callback_admin_logout(callback: CallbackQuery) -> None:
+    async def callback_admin_logout(callback: CallbackQuery, state: FSMContext) -> None:
         message = editable_callback_message(callback)
         if message is None:
             await callback.answer("Сообщение недоступно", show_alert=True)
             return
         await callback.answer()
+        await state.clear()
         await client.token_storage.clear()
         client.mark_session_expired("admin logout")
         await message.edit_text(
