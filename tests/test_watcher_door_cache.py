@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.models import DoorKey
-from domonap_bot.telegram.call_watcher import CallWatcher
+from domonap_bot.telegram.call_watcher import _DOOR_MAP_TTL, CallWatcher
 
 
 def _settings() -> Settings:
@@ -44,7 +44,7 @@ async def test_stale_door_cache_is_replaced_atomically() -> None:
         old_door.id: old_door,
         old_door.door_id: old_door,
     }
-    watcher._door_map_loaded_at = 0.0
+    watcher._door_map_loaded_at = time.monotonic() - _DOOR_MAP_TTL - 1.0
 
     await watcher._ensure_door_map_fresh()
 
