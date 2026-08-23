@@ -51,7 +51,13 @@ async def main() -> None:
             "Set at least one Telegram user ID in .env to restrict access."
         )
         return
-    if settings.storage_encryption_key is None:
+
+    storage_encryption_key = (
+        settings.storage_encryption_key.get_secret_value().strip()
+        if settings.storage_encryption_key is not None
+        else ""
+    )
+    if not storage_encryption_key:
         logger.error(
             "STORAGE_ENCRYPTION_KEY is empty — refusing to start. "
             "Generate a Fernet key and store it separately from the SQLite database."
@@ -68,10 +74,7 @@ async def main() -> None:
         await storage.initialize()
 
         try:
-            token_storage = TokenStorage(
-                storage,
-                encryption_key=settings.storage_encryption_key.get_secret_value(),
-            )
+            token_storage = TokenStorage(storage, encryption_key=storage_encryption_key)
         except ValueError as exc:
             logger.error("Invalid storage encryption key: %s", exc)
             return
