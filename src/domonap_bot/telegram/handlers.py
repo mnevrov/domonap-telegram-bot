@@ -185,16 +185,16 @@ def register_handlers(
         except DomonapError:
             await message.answer("Authorization failed. Check the code and try again.")
             return
+        finally:
+            try:
+                await message.delete()
+            except Exception:
+                pass
 
         if success:
             await message.answer("✅ Successfully authorized with Domonap!")
         else:
             await message.answer("❌ Invalid code or session expired. Run /auth again.")
-
-        try:
-            await message.delete()
-        except Exception:
-            pass
 
     @router.message(Command("logout"))
     @admin_access.require_access
