@@ -22,7 +22,10 @@ def _make_callback(user_id: int) -> MagicMock:
 
 
 def _handlers(router: Router) -> dict[str, object]:
-    return {handler.callback.__name__: handler.callback for handler in router.callback_query.handlers}
+    return {
+        handler.callback.__name__: handler.callback
+        for handler in router.callback_query.handlers
+    }
 
 
 def _register(router: Router, client: MagicMock) -> None:
