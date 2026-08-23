@@ -50,10 +50,11 @@ CURRENT_PROFILE: Final = DomonapProtocolProfile(
     name="domonap-android-9850-baseline",
     source_app_version_code=9850,
     source_app_release_date="2026-07-30",
-    # 9850 is the current public app release. The protocol baseline below is the
-    # implementation currently known to work; APK extraction is responsible for
-    # independently verifying and reporting drift from it.
-    verification="runtime-baseline-awaiting-apk-verification",
+    # The official RuStore APK 9850 was signer-verified and statically analyzed.
+    # Some runtime endpoints are not visible as literals in the partial JADX output,
+    # so the profile remains the authoritative bot runtime contract while the JSON
+    # baseline separately records which markers were proven by static APK evidence.
+    verification="apk-verified-partial-static",
     base_url="https://api.domonap.ru",
     trusted_host="api.domonap.ru",
     user_agent="okhttp/5.3.2",
@@ -103,6 +104,6 @@ CURRENT_PROFILE: Final = DomonapProtocolProfile(
     ),
     signalr_hub="/notificationHub",
     signalr_target="ReceivePush",
-    signalr_events=("DomofonCalling", "DomofonCallEnded"),
+    signalr_events=("DomofonCalling", "DomofonCallAnswered", "DomofonCallEnded"),
     expected_header_markers=("dom-app", "dom-platform", "instanceId"),
 )
