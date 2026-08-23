@@ -36,7 +36,10 @@ def test_apk_extractor_finds_protocol_markers(tmp_path: Path) -> None:
         Object getKeys();
         String hub = "/notificationHub";
         String target = "ReceivePush";
-        String event = "DomofonCalling";
+        String event1 = "DomofonCalling";
+        String event2 = "DomofonCallAnswered";
+        String unrelated1 = "DomofonDoorAddressEntity";
+        String unrelated2 = "DomofonPushMapper";
         """,
         encoding="utf-8",
     )
@@ -50,7 +53,10 @@ def test_apk_extractor_finds_protocol_markers(tmp_path: Path) -> None:
     assert "POST /client-api/Key/GetPagedKeysByKeysType" in observed["endpoints"]
     assert observed["signalr"]["hubs"] == ["/notificationHub"]
     assert observed["signalr"]["targets"] == ["ReceivePush"]
-    assert observed["signalr"]["events"] == ["DomofonCalling"]
+    assert observed["signalr"]["events"] == [
+        "DomofonCallAnswered",
+        "DomofonCalling",
+    ]
     assert "endpoint:/client-api/Key/GetPagedKeysByKeysType" in observed["evidence"]
 
 
@@ -59,6 +65,10 @@ def test_contract_diff_flags_security_and_breaking_changes() -> None:
         "trusted_hosts": ["api.domonap.ru"],
         "observed_hosts": ["api.domonap.ru", "www.domonap.ru"],
         "observed_headers": ["dom-app", "dom-platform", "instanceId"],
+        "endpoints": [
+            "POST /client-api/Key/GetPagedKeysByKeysType",
+            "POST /client-api/CallLog/GetCallLogs",
+        ],
         "observed_endpoints": ["POST /client-api/Key/GetPagedKeysByKeysType"],
         "signalr": {
             "hub": "/notificationHub",
@@ -90,3 +100,4 @@ def test_contract_diff_flags_security_and_breaking_changes() -> None:
     assert (
         "Expected endpoint disappeared: /client-api/Key/GetPagedKeysByKeysType" in messages
     )
+    assert "Expected endpoint disappeared: /client-api/CallLog/GetCallLogs" not in messages
