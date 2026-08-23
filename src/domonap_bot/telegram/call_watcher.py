@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol
@@ -12,6 +13,7 @@ from domonap_bot.config import Settings
 from domonap_bot.domonap.client import BASE_URL, DomonapClient
 from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
 from domonap_bot.domonap.signalr import DomonapSignalRTransport
+from domonap_bot.telegram.access import AccessControl
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +36,15 @@ class CallWatcher:
         settings: Settings,
         *,
         event_source: CallEventSource | None = None,
+        access: AccessControl | None = None,
     ) -> None:
         self._client = client
         self._bot = bot
         self._settings = settings
+        self._access = access
         self._task: asyncio.Task[Any] | None = None
         self._seen_ids: set[str] = set()
+        self._seen_order: deque[str] = deque()
         self._door_map: dict[str, DoorKey] = {}
         if event_source is None:
             self._event_source: CallEventSource = DomonapSignalRTransport(
@@ -92,7 +97,7 @@ class CallWatcher:
         try:
             logs = await self._client.get_call_logs(per_page=20, missed_calls=False)
             for entry in logs:
-                self._seen_ids.add(entry.call_id)
+                self._add_seen(entry.call_id)
             logger.info("Pre-populated %s seen call IDs from call logs", len(logs))
         except Exception as exc:
             logger.warning("Failed to pre-populate seen IDs: %s", exc)
@@ -123,6 +128,11 @@ class CallWatcher:
         except Exception as exc:
             logger.warning("Failed to load door map: %s", exc)
 
+    def _recipient_ids(self) -> list[int]:
+        if self._access is not None:
+            return self._access.user_ids()
+        return list(dict.fromkeys(self._settings.allowed_telegram_user_ids))
+
     async def _handle_payload(self, payload: IncomingCallPayload) -> None:
         if payload.call_id in self._seen_ids:
             return
@@ -135,7 +145,7 @@ class CallWatcher:
             video_url = door.http_video_url or door.webrtc_video_url
 
         await self._send_notification(
-            user_ids=self._settings.allowed_telegram_user_ids,
+            user_ids=self._recipient_ids(),
             text=self._build_message_text(
                 door=door,
                 address=payload.address or payload.title,
@@ -155,7 +165,7 @@ class CallWatcher:
         video_url = door.http_video_url or door.webrtc_video_url if door else None
 
         await self._send_notification(
-            user_ids=self._settings.allowed_telegram_user_ids,
+            user_ids=self._recipient_ids(),
             text=self._build_message_text(door=door, call_time=entry.call_time),
             photo_url=entry.photo_url,
             door_id=entry.door_id or (door.door_id if door else None),
@@ -164,9 +174,13 @@ class CallWatcher:
         )
 
     def _add_seen(self, call_id: str) -> None:
+        if call_id in self._seen_ids:
+            return
         self._seen_ids.add(call_id)
-        if len(self._seen_ids) > _MAX_SEEN_IDS:
-            self._seen_ids = set(list(self._seen_ids)[-_MAX_SEEN_IDS // 2 :])
+        self._seen_order.append(call_id)
+        while len(self._seen_order) > _MAX_SEEN_IDS:
+            oldest = self._seen_order.popleft()
+            self._seen_ids.discard(oldest)
 
     @staticmethod
     def _build_message_text(

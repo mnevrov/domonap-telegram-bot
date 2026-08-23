@@ -22,6 +22,10 @@ class AccessControl:
             return True
         return user_id in self._allowed
 
+    def user_ids(self) -> list[int]:
+        """Return the current explicit allow-list in deterministic order."""
+        return sorted(self._allowed)
+
     def add_user(self, user_id: int) -> None:
         self._allowed.add(user_id)
 
