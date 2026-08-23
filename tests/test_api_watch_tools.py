@@ -32,7 +32,7 @@ def test_apk_extractor_finds_protocol_markers(tmp_path: Path) -> None:
         String b = "dom-platform";
         String c = "instanceId";
         String d = "device-info";
-        @POST("/client-api/Key/GetPagedKeysByKeysType")
+        @POST("client-api/Key/GetPagedKeysByKeysType")
         Object getKeys();
         String hub = "/notificationHub";
         String target = "ReceivePush";
@@ -45,18 +45,21 @@ def test_apk_extractor_finds_protocol_markers(tmp_path: Path) -> None:
 
     assert observed["app"]["version_codes"] == [9851]
     assert "api.domonap.ru" in observed["hosts"]
+    assert observed["api_hosts"] == ["api.domonap.ru"]
     assert "device-info" in observed["headers"]
     assert "POST /client-api/Key/GetPagedKeysByKeysType" in observed["endpoints"]
     assert observed["signalr"]["hubs"] == ["/notificationHub"]
     assert observed["signalr"]["targets"] == ["ReceivePush"]
     assert observed["signalr"]["events"] == ["DomofonCalling"]
+    assert "endpoint:/client-api/Key/GetPagedKeysByKeysType" in observed["evidence"]
 
 
 def test_contract_diff_flags_security_and_breaking_changes() -> None:
     baseline = {
-        "hosts": ["api.domonap.ru"],
-        "headers": ["dom-app", "dom-platform", "instanceId"],
-        "endpoints": ["POST /client-api/Key/GetPagedKeysByKeysType"],
+        "trusted_hosts": ["api.domonap.ru"],
+        "observed_hosts": ["api.domonap.ru", "www.domonap.ru"],
+        "observed_headers": ["dom-app", "dom-platform", "instanceId"],
+        "observed_endpoints": ["POST /client-api/Key/GetPagedKeysByKeysType"],
         "signalr": {
             "hub": "/notificationHub",
             "target": "ReceivePush",
@@ -64,7 +67,8 @@ def test_contract_diff_flags_security_and_breaking_changes() -> None:
         },
     }
     observed = {
-        "hosts": ["api2.domonap.ru"],
+        "hosts": ["api2.domonap.ru", "www.domonap.ru"],
+        "api_hosts": ["api2.domonap.ru"],
         "headers": ["dom-app", "dom-platform", "device-info"],
         "endpoints": ["POST /client-api/Key/GetKeysV2"],
         "signalr": {
@@ -81,7 +85,8 @@ def test_contract_diff_flags_security_and_breaking_changes() -> None:
     assert "SECURITY" in severities
     assert "HIGH" in severities
     assert "MEDIUM" in severities
-    assert "New Domonap host detected: api2.domonap.ru" in messages
+    assert "New API-like Domonap host detected: api2.domonap.ru" in messages
+    assert "New non-API Domonap host marker: www.domonap.ru" not in messages
     assert (
         "Expected endpoint disappeared: /client-api/Key/GetPagedKeysByKeysType" in messages
     )
