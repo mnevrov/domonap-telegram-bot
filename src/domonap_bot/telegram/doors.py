@@ -9,7 +9,10 @@ from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import back_keyboard, door_detail_keyboard, door_list_keyboard
+from domonap_bot.telegram.errors import describe_error
+from domonap_bot.telegram.keyboards import back_keyboard, door_detail_keyboard
+from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text
+from domonap_bot.telegram.ui.views import View, door_detail_view, door_list_view
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +30,11 @@ def register_door_handlers(
     async def callback_door_list(callback: CallbackQuery) -> None:
         data = callback.data
         if not data:
-            await callback.answer("Invalid data", show_alert=True)
+            await acknowledge_callback(callback, "Некорректные данные", show_alert=True)
             return
         message = editable_callback_message(callback)
         if message is None:
-            await callback.answer("Message unavailable", show_alert=True)
+            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
 
         page_str = data.removeprefix("d:p:")
@@ -40,13 +43,14 @@ def register_door_handlers(
         except ValueError:
             page = 0
 
+        await acknowledge_callback(callback)
         try:
             doors = await client.get_doors()
         except DomonapError:
-            await message.edit_text(
-                "Failed to load doors.", reply_markup=back_keyboard("m:main")
+            await edit_text(
+                message,
+                View("Не удалось загрузить двери.", back_keyboard("m:main", "← Главное меню")),
             )
-            await callback.answer()
             return
 
         total = len(doors)
@@ -55,94 +59,89 @@ def register_door_handlers(
             page = total_pages - 1
         start = page * _PER_PAGE
         page_doors = doors[start : start + _PER_PAGE]
-
-        if total > 0:
-            text = f"🚪 Doors ({total})\n─────────────────────\n"
-        else:
-            text = "No doors available."
-        lines = [f"{start + i + 1}. 🚪 {d.name}" for i, d in enumerate(page_doors)]
-        text += "\n".join(lines)
-
-        kb = door_list_keyboard(page_doors, page, total_pages)
-        await message.edit_text(text, reply_markup=kb)
-        await callback.answer()
+        await edit_text(
+            message,
+            door_list_view(
+                page_doors,
+                page=page,
+                total_pages=total_pages,
+                total=total,
+            ),
+        )
 
     @router.callback_query(F.data.startswith("d:det:"))
     @access.require_access
     async def callback_door_detail(callback: CallbackQuery) -> None:
         data = callback.data
         if not data:
-            await callback.answer("Invalid data", show_alert=True)
+            await acknowledge_callback(callback, "Некорректные данные", show_alert=True)
             return
         message = editable_callback_message(callback)
         if message is None:
-            await callback.answer("Message unavailable", show_alert=True)
+            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
         door_id = data.removeprefix("d:det:")
 
+        await acknowledge_callback(callback)
         try:
             doors = await client.get_doors()
         except DomonapError:
-            await message.edit_text(
-                "Failed to load door details.", reply_markup=back_keyboard("d:p:0")
+            await edit_text(
+                message,
+                View("Не удалось загрузить данные двери.", back_keyboard("d:p:0", "← Двери")),
             )
-            await callback.answer()
             return
 
-        door = next((d for d in doors if d.door_id == door_id), None)
-        if not door:
-            await message.edit_text("Door not found.", reply_markup=back_keyboard("d:p:0"))
-            await callback.answer()
+        door = next((item for item in doors if item.door_id == door_id), None)
+        if door is None:
+            await edit_text(message, View("Дверь не найдена.", back_keyboard("d:p:0", "← Двери")))
             return
 
-        parts = [
-            f"🚪 {door.name}",
-            "─────────────────────",
-        ]
-        if door.domofon_public_pin:
-            pin = door.domofon_public_pin
-            if len(pin) >= 4:
-                masked = pin[:2] + "****" + pin[-2:]
-            else:
-                masked = "****"
-            parts.append(f"PIN: {masked}")
-        if door.http_video_url or door.webrtc_video_url:
-            parts.append("📹 Video available")
-        text = "\n".join(parts)
-
-        await message.edit_text(text, reply_markup=door_detail_keyboard(door))
-        await callback.answer()
+        await edit_text(message, door_detail_view(door))
 
     @router.callback_query(F.data.startswith("d:open:"))
     @access.require_access
     async def callback_door_open(callback: CallbackQuery) -> None:
         data = callback.data
         if not data:
-            await callback.answer("Invalid data", show_alert=True)
+            await acknowledge_callback(callback, "Некорректные данные", show_alert=True)
             return
         message = editable_callback_message(callback)
         if message is None:
-            await callback.answer("Message unavailable", show_alert=True)
+            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
         door_id = data.removeprefix("d:open:")
         user_id = callback.from_user.id if callback.from_user else 0
 
         if not cooldown.is_ready(user_id, door_id):
             remaining = cooldown.remaining(user_id, door_id)
-            await callback.answer(f"Wait {remaining:.0f}s", show_alert=True)
+            await acknowledge_callback(
+                callback,
+                f"Повторите через {remaining:.0f} с",
+                show_alert=True,
+            )
             return
 
-        await callback.answer("Opening...")
+        await acknowledge_callback(callback, "Открываю…")
         cooldown.set(user_id, door_id)
 
         try:
             success = await client.open_door(door_id)
         except DomonapError as exc:
-            await message.edit_text(f"❌ {exc}")
+            await edit_text(
+                message,
+                View(f"❌ {describe_error(exc)}", back_keyboard("d:p:0", "← Двери")),
+            )
             return
 
-        text = "✅ Door opened!" if success else "❌ Failed to open."
-        await message.edit_text(
-            text,
-            reply_markup=door_detail_keyboard(DoorKey(id=door_id, doorId=door_id, name="")),
-        )
+        if success:
+            view = View(
+                "✅ Дверь открыта.",
+                door_detail_keyboard(DoorKey(id=door_id, doorId=door_id, name="Дверь")),
+            )
+        else:
+            view = View(
+                "❌ Не удалось открыть дверь.",
+                back_keyboard("d:p:0", "← Двери"),
+            )
+        await edit_text(message, view)
