@@ -13,5 +13,5 @@ def describe_error(exc: DomonapError) -> str:
     if isinstance(exc, NetworkError):
         return "Network unavailable. Please try again later."
     if isinstance(exc, ApiError):
-        return "Domonap API request failed. Please try again later."
-    return "Domonap request failed. Please try again later."
+        return "Domonap API error. Please try again later."
+    return "Domonap API error. Please try again later."
