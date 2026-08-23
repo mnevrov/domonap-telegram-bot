@@ -25,6 +25,7 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 | `ALLOWED_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs who can open doors (leave empty for open access) |
 | `ADMIN_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs who can manage authorization |
 | `DOMONAP_PHONE` | Your Domonap account phone number |
+| `DOMONAP_REGISTER_DEVICE_TOKEN` | Call `UpdateDeviceToken` after SMS authorization. Default: `false` to preserve official-app push routing |
 | `STORAGE_PATH` | Path to SQLite database file (default: `data/storage.db`) |
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO) |
 | `CALL_WATCHER_ENABLED` | Enable incoming call notifications (default: true) |
@@ -32,6 +33,12 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 > ⚠️ **`ALLOWED_TELEGRAM_USER_IDS` is required.** The bot refuses to start
 > if empty. Set at least one Telegram user ID before deploying,
 > especially before exposing the bot token.
+
+> **Official app coexistence:** keep `DOMONAP_REGISTER_DEVICE_TOKEN=false` unless
+> you explicitly want this bot authorization to register its device token for push delivery.
+> The token is still sent as part of `ConfirmAuthorization`; only the separate
+> `UpdateDeviceToken` call is skipped. Incoming-call notifications can use SignalR without
+> replacing the official mobile app's push route.
 
 4. Run with Docker:
 
