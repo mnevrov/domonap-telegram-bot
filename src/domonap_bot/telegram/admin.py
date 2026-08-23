@@ -26,6 +26,8 @@ def register_admin_handlers(
     admin_access: AccessControl,
     access: AccessControl | None = None,
 ) -> None:
+    removal_lock = asyncio.Lock()
+
     async def _admin_panel(event: Message | CallbackQuery) -> None:
         has_token = client.access_token or client.refresh_token
         users = await storage.list_allowed_users()
@@ -204,16 +206,19 @@ def register_admin_handlers(
             await callback.answer("Message unavailable", show_alert=True)
             return
 
-        if admin_access.is_allowed(uid) and len(admin_access.user_ids()) <= 1:
-            _pending_removals.pop(admin_id, None)
-            await callback.answer("Cannot remove the last admin.", show_alert=True)
-            return
+        async with removal_lock:
+            admin_ids = set(await storage.list_admin_users())
+            if uid in admin_ids and len(admin_ids) <= 1:
+                _pending_removals.pop(admin_id, None)
+                await callback.answer("Cannot remove the last admin.", show_alert=True)
+                return
 
-        _pending_removals.pop(admin_id, None)
-        await storage.remove_user(uid)
-        if access is not None:
-            access.remove_user(uid)
-        admin_access.remove_user(uid)
+            _pending_removals.pop(admin_id, None)
+            await storage.remove_user(uid)
+            if access is not None:
+                access.remove_user(uid)
+            admin_access.remove_user(uid)
+
         await callback.answer(f"User {uid} removed.")
 
         users = await storage.list_allowed_users()
