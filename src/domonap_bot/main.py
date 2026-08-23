@@ -27,9 +27,17 @@ async def main() -> None:
     await storage.initialize()
 
     token_storage = TokenStorage(storage)
-    client = DomonapClient(token_storage, phone=settings.domonap_phone)
+    client = DomonapClient(
+        token_storage,
+        phone=settings.domonap_phone,
+        register_device_token=settings.domonap_register_device_token,
+    )
     restored = await client.hydrate_from_storage()
     logger.info("Session restored from storage: %s", restored)
+    logger.info(
+        "Domonap device-token registration: %s",
+        "enabled" if settings.domonap_register_device_token else "disabled",
+    )
 
     bot, dp = await build_bot(settings, client, storage)
 

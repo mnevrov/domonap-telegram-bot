@@ -94,9 +94,11 @@ class DomonapClient:
         phone: str = "",
         device_token: str | None = None,
         instance_id: str | None = None,
+        register_device_token: bool = False,
     ) -> None:
         self._token_storage = token_storage
         self._phone = phone
+        self._register_device_token = register_device_token
 
         self._device_token_explicit = device_token is not None
         self._instance_id_explicit = instance_id is not None
@@ -151,6 +153,10 @@ class DomonapClient:
     @property
     def instance_id(self) -> str:
         return self._instance_id
+
+    @property
+    def register_device_token(self) -> bool:
+        return self._register_device_token
 
     def set_tokens(
         self,
@@ -403,7 +409,12 @@ class DomonapClient:
             token_data.refresh_token,
             token_data.refresh_expiration_date,
         )
-        await self._update_device_token()
+        if self._register_device_token:
+            await self._update_device_token()
+        else:
+            logger.info(
+                "Skipping UpdateDeviceToken to preserve official Domonap push routing"
+            )
         return token_data
 
     async def refresh_session(self) -> bool:
