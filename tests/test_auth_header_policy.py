@@ -71,13 +71,9 @@ async def test_authorization_removed_for_non_trusted_scheme_or_port(url: str) ->
     assert seen_authorization == [None]
 
 
-def test_auth_hook_is_not_registered_twice() -> None:
-    client = httpx.AsyncClient(base_url="https://api.domonap.ru")
-    try:
+@pytest.mark.asyncio
+async def test_auth_hook_is_not_registered_twice() -> None:
+    async with httpx.AsyncClient(base_url="https://api.domonap.ru") as client:
         DomonapAuth(client)
         DomonapAuth(client)
         assert len(client.event_hooks["request"]) == 1
-    finally:
-        import asyncio
-
-        asyncio.run(client.aclose())
