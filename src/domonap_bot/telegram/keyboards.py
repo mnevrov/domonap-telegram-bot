@@ -130,22 +130,9 @@ def call_list_keyboard(
 
 
 def call_detail_keyboard(
-    call_id: str, door_id: str | None, video_url: str | None
+    _call_id: str, door_id: str | None, video_url: str | None
 ) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                text="📞 Ответить",
-                callback_data=f"answer:{call_id}",
-                style="primary",
-            ),
-            InlineKeyboardButton(
-                text="Сбросить",
-                callback_data=f"reject:{call_id}",
-                style="danger",
-            ),
-        ],
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
     if door_id:
         rows.append(
             [

@@ -1,7 +1,13 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from aiogram import Router
-from aiogram.types import CallbackQuery, Message, User
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    User,
+)
 
 from domonap_bot.domonap.exceptions import (
     ApiError,
@@ -27,13 +33,43 @@ def _make_message(user_id: int) -> MagicMock:
     return msg
 
 
-def _make_callback(user_id: int) -> MagicMock:
+def _incoming_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔓 Открыть",
+                    callback_data="open:door1",
+                    style="success",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📞 Ответить",
+                    callback_data="answer:call123",
+                    style="primary",
+                ),
+                InlineKeyboardButton(
+                    text="Сбросить",
+                    callback_data="reject:call123",
+                    style="danger",
+                ),
+            ],
+        ]
+    )
+
+
+def _make_callback(user_id: int, *, caption: str | None = None) -> MagicMock:
     cb = MagicMock(spec=CallbackQuery)
     cb.from_user = MagicMock(spec=User)
     cb.from_user.id = user_id
     cb.answer = AsyncMock()
     cb.message = MagicMock(spec=Message)
+    cb.message.text = None if caption is not None else "🔔 Звонок в домофон\n🚪 Главный вход"
+    cb.message.caption = caption
+    cb.message.reply_markup = _incoming_keyboard()
     cb.message.edit_text = AsyncMock()
+    cb.message.edit_caption = AsyncMock()
     return cb
 
 
@@ -276,11 +312,10 @@ class TestAuthSurface:
 
 
 class TestAnswerAndEndCall:
-    async def test_answer_call_success(self) -> None:
+    async def test_answer_call_success_updates_text_card_and_actions(self) -> None:
         client = MagicMock()
         client.answer_call = AsyncMock(return_value=True)
         handlers = _build_callback_handlers(client)
-
         cb = _make_callback(user_id=1)
         cb.data = "answer:call123"
 
@@ -288,35 +323,66 @@ class TestAnswerAndEndCall:
 
         client.answer_call.assert_awaited_once_with("call123")
         cb.message.edit_text.assert_awaited_once()
-        assert cb.message.edit_text.call_args[0][0] == "📞 Call answered."
-        assert cb.message.edit_text.call_args[1]["reply_markup"] is not None
+        text = cb.message.edit_text.await_args.args[0]
+        keyboard = cb.message.edit_text.await_args.kwargs["reply_markup"]
+        assert "🔔 Звонок в домофон" in text
+        assert text.endswith("✅ Звонок принят.")
+        assert keyboard.inline_keyboard[0][0].callback_data == "open:door1"
+        assert keyboard.inline_keyboard[1][0].text == "✅ Звонок принят"
+        assert keyboard.inline_keyboard[1][0].callback_data == "noop"
 
-    async def test_answer_call_failure_result(self) -> None:
+    async def test_answer_call_success_updates_photo_caption(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(return_value=True)
+        handlers = _build_callback_handlers(client)
+        cb = _make_callback(
+            user_id=1,
+            caption="🔔 Звонок в домофон\n🚪 Главный вход",
+        )
+        cb.data = "answer:call123"
+
+        await handlers["callback_answer_call"](cb)
+
+        cb.message.edit_caption.assert_awaited_once()
+        cb.message.edit_text.assert_not_awaited()
+        assert cb.message.edit_caption.await_args.kwargs["caption"].endswith(
+            "✅ Звонок принят."
+        )
+
+    async def test_answer_call_false_preserves_active_actions(self) -> None:
         client = MagicMock()
         client.answer_call = AsyncMock(return_value=False)
         handlers = _build_callback_handlers(client)
-
         cb = _make_callback(user_id=1)
         cb.data = "answer:call123"
 
         await handlers["callback_answer_call"](cb)
 
-        cb.message.edit_text.assert_awaited_once()
-        assert cb.message.edit_text.call_args[0][0] == "❌ Failed to answer call."
-        assert cb.message.edit_text.call_args[1]["reply_markup"] is not None
+        keyboard = cb.message.edit_text.await_args.kwargs["reply_markup"]
+        callbacks = {
+            button.callback_data
+            for row in keyboard.inline_keyboard
+            for button in row
+        }
+        assert "answer:call123" in callbacks
+        assert "reject:call123" in callbacks
+        assert cb.message.edit_text.await_args.args[0].endswith(
+            "❌ Не удалось ответить на звонок."
+        )
 
-    async def test_answer_call_domonap_error(self) -> None:
+    async def test_answer_call_domonap_error_preserves_card_context(self) -> None:
         client = MagicMock()
         client.answer_call = AsyncMock(side_effect=ApiError("boom"))
         handlers = _build_callback_handlers(client)
-
         cb = _make_callback(user_id=1)
         cb.data = "answer:call123"
 
         await handlers["callback_answer_call"](cb)
 
         cb.message.edit_text.assert_awaited_once()
-        assert "API error" in cb.message.edit_text.call_args[0][0]
+        text = cb.message.edit_text.await_args.args[0]
+        assert "🔔 Звонок в домофон" in text
+        assert "API error" in text
 
     async def test_answer_call_respects_cooldown(self) -> None:
         client = MagicMock()
@@ -332,37 +398,51 @@ class TestAnswerAndEndCall:
         await handlers["callback_answer_call"](cb2)
 
         client.answer_call.assert_awaited_once()
-        cb2.answer.assert_awaited_with(
-            cb2.answer.call_args[0][0], show_alert=True
-        )
+        cb2.answer.assert_awaited_with(cb2.answer.call_args[0][0], show_alert=True)
 
-    async def test_end_call_success(self) -> None:
+    async def test_end_call_success_marks_call_finished(self) -> None:
         client = MagicMock()
         client.end_call = AsyncMock(return_value=True)
         handlers = _build_callback_handlers(client)
-
         cb = _make_callback(user_id=1)
         cb.data = "reject:call123"
 
         await handlers["callback_end_call"](cb)
 
         client.end_call.assert_awaited_once_with("call123")
-        cb.message.edit_text.assert_awaited_once()
-        assert cb.message.edit_text.call_args[0][0] == "🔴 Call ended."
-        assert cb.message.edit_text.call_args[1]["reply_markup"] is not None
+        text = cb.message.edit_text.await_args.args[0]
+        keyboard = cb.message.edit_text.await_args.kwargs["reply_markup"]
+        assert text.endswith("🔴 Звонок завершён.")
+        assert keyboard.inline_keyboard[1][0].text == "🔴 Звонок завершён"
+        assert keyboard.inline_keyboard[1][0].callback_data == "noop"
 
-    async def test_end_call_domonap_error(self) -> None:
+    async def test_end_call_domonap_error_preserves_card(self) -> None:
         client = MagicMock()
         client.end_call = AsyncMock(side_effect=ApiError("boom"))
         handlers = _build_callback_handlers(client)
-
         cb = _make_callback(user_id=1)
         cb.data = "reject:call123"
 
         await handlers["callback_end_call"](cb)
 
         cb.message.edit_text.assert_awaited_once()
-        assert "API error" in cb.message.edit_text.call_args[0][0]
+        assert "🔔 Звонок в домофон" in cb.message.edit_text.await_args.args[0]
+        assert "API error" in cb.message.edit_text.await_args.args[0]
+
+    async def test_open_door_success_marks_only_door_action(self) -> None:
+        client = MagicMock()
+        client.open_door = AsyncMock(return_value=True)
+        handlers = _build_callback_handlers(client)
+        cb = _make_callback(user_id=1)
+        cb.data = "open:door1"
+
+        await handlers["callback_open_door"](cb)
+
+        keyboard = cb.message.edit_text.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "✅ Открыто"
+        assert keyboard.inline_keyboard[0][0].callback_data == "noop"
+        assert keyboard.inline_keyboard[1][0].callback_data == "answer:call123"
+        assert keyboard.inline_keyboard[1][1].callback_data == "reject:call123"
 
     async def test_answer_and_reject_have_independent_cooldowns(self) -> None:
         client = MagicMock()
