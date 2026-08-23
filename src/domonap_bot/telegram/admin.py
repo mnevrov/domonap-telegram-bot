@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 _pending_removals: dict[int, int] = {}
 
 
+def _parse_telegram_user_id(value: str) -> int | None:
+    text = value.strip()
+    if not text.isascii() or not text.isdecimal():
+        return None
+    user_id = int(text)
+    return user_id if user_id > 0 else None
+
+
 def register_admin_handlers(
     router: Router,
     client: DomonapClient,
@@ -98,12 +106,11 @@ def register_admin_handlers(
     @router.message(AdminStates.waiting_user_id, F.text)
     @admin_access.require_access
     async def fsm_add_user_id(message: Message, state: FSMContext) -> None:
-        text = (message.text or "").strip()
-        if not text.isdigit():
-            await message.answer("Invalid ID. Please send a numeric Telegram user ID.")
+        uid = _parse_telegram_user_id(message.text or "")
+        if uid is None:
+            await message.answer("Invalid ID. Please send a positive numeric Telegram user ID.")
             return
 
-        uid = int(text)
         await storage.set_user_allowed(uid)
         if access is not None:
             access.add_user(uid)
@@ -143,12 +150,11 @@ def register_admin_handlers(
     @router.message(AdminStates.waiting_grant_admin_id, F.text)
     @admin_access.require_access
     async def fsm_grant_admin_id(message: Message, state: FSMContext) -> None:
-        text = (message.text or "").strip()
-        if not text.isdigit():
-            await message.answer("Invalid ID. Please send a numeric Telegram user ID.")
+        uid = _parse_telegram_user_id(message.text or "")
+        if uid is None:
+            await message.answer("Invalid ID. Please send a positive numeric Telegram user ID.")
             return
 
-        uid = int(text)
         if not await storage.is_user_allowed(uid):
             await message.answer(
                 f"❌ User {uid} is not registered. Use 'Add user' first.",
@@ -183,10 +189,8 @@ def register_admin_handlers(
         if not data:
             await callback.answer("Invalid user ID.", show_alert=True)
             return
-        uid_str = data.removeprefix("a:rm:")
-        try:
-            uid = int(uid_str)
-        except ValueError:
+        uid = _parse_telegram_user_id(data.removeprefix("a:rm:"))
+        if uid is None:
             await callback.answer("Invalid user ID.", show_alert=True)
             return
 
