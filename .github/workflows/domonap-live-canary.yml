@@ -1,0 +1,98 @@
+name: Domonap Live Canary
+
+on:
+  schedule:
+    - cron: "43 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  live-canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run non-mutating API probes
+        id: probe
+        continue-on-error: true
+        env:
+          DOMONAP_CANARY_ACCESS_TOKEN: ${{ secrets.DOMONAP_CANARY_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python -m domonap_bot.tools.api_probe \
+            --output /tmp/domonap-live-canary.json
+
+      - name: Read canary result
+        id: result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f /tmp/domonap-live-canary.json ]]; then
+            echo "overall=failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/domonap-live-canary.json").read_text())
+          print(f"overall={report['overall']}")
+          PY
+
+      - name: Upload canary report
+        if: always() && steps.result.outputs.overall != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: domonap-live-canary
+          path: /tmp/domonap-live-canary.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Open or update degradation issue
+        if: steps.result.outputs.overall == 'degraded' || steps.result.outputs.overall == 'failed'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="[api-canary] Domonap live compatibility degraded"
+          existing="$(gh issue list \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          {
+            echo "# Domonap live canary degradation"
+            echo
+            if [[ -f /tmp/domonap-live-canary.json ]]; then
+              echo '```json'
+              cat /tmp/domonap-live-canary.json
+              echo '```'
+            else
+              echo "The probe failed before producing a report."
+            fi
+            echo
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "The canary performs only read-only user/keys/call-log/SignalR negotiate requests."
+          } > /tmp/canary-issue.md
+          if [[ -z "$existing" ]]; then
+            gh issue create --title "$title" --body-file /tmp/canary-issue.md
+          else
+            gh issue edit "$existing" --body-file /tmp/canary-issue.md
+          fi
+
+      - name: Fail on real degradation
+        if: steps.result.outputs.overall == 'degraded' || steps.result.outputs.overall == 'failed'
+        run: exit 1

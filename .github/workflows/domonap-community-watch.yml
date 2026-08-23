@@ -1,0 +1,103 @@
+name: Domonap Community Watch
+
+on:
+  schedule:
+    - cron: "11 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  upstream-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch upstream integration sources
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/domonap-upstream
+          gh api \
+            repos/svmironov/domonap_intercom/contents/custom_components/domonap/api.py \
+            -H 'Accept: application/vnd.github.raw+json' \
+            > /tmp/domonap-upstream/api.py
+          gh api \
+            repos/svmironov/domonap_intercom/contents/custom_components/domonap/notify_consumer.py \
+            -H 'Accept: application/vnd.github.raw+json' \
+            > /tmp/domonap-upstream/notify_consumer.py
+          gh api repos/svmironov/domonap_intercom/commits/main \
+            --jq '.sha' > /tmp/domonap-upstream/commit.txt
+
+      - name: Extract and compare upstream protocol
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/domonap-community-watch
+          PYTHONPATH=src python -m domonap_bot.tools.apk_extract \
+            --jadx-dir /tmp/domonap-upstream \
+            --output /tmp/domonap-community-watch/observed.json
+          PYTHONPATH=src python -m domonap_bot.tools.contract_diff \
+            --baseline contracts/domonap/current.json \
+            --observed /tmp/domonap-community-watch/observed.json \
+            --json-output /tmp/domonap-community-watch/diff.json \
+            --markdown-output /tmp/domonap-community-watch/diff.md
+          cp /tmp/domonap-upstream/commit.txt /tmp/domonap-community-watch/upstream-commit.txt
+
+      - name: Read severity
+        id: diff
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/domonap-community-watch/diff.json").read_text())
+          print(f"severity={report['highest_severity']}")
+          PY
+
+      - name: Upload upstream analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: domonap-community-watch
+          path: /tmp/domonap-community-watch
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Open or update meaningful upstream drift issue
+        if: >-
+          steps.diff.outputs.severity == 'SECURITY' ||
+          steps.diff.outputs.severity == 'HIGH' ||
+          steps.diff.outputs.severity == 'MEDIUM'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="[api-community] Domonap integration protocol drift"
+          existing="$(gh issue list \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          {
+            echo "# Community protocol drift"
+            echo
+            echo "Reference repository: svmIRONOV/domonap_intercom"
+            echo "Observed commit: $(cat /tmp/domonap-community-watch/upstream-commit.txt)"
+            echo
+            cat /tmp/domonap-community-watch/diff.md
+            echo
+            echo "This source is a sensor, not a source of truth. Verify against the official APK/live API."
+          } > /tmp/community-issue.md
+          if [[ -z "$existing" ]]; then
+            gh issue create --title "$title" --body-file /tmp/community-issue.md
+          else
+            gh issue edit "$existing" --body-file /tmp/community-issue.md
+          fi
