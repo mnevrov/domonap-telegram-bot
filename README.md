@@ -11,7 +11,7 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
    cd domonap-telegram-bot
    ```
 
-2. Create `.env` from example:
+2. Create `.env` from the example:
 
    ```bash
    cp .env.example .env
@@ -19,20 +19,24 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 
 3. Fill in `.env`:
 
-   | Variable | Description |
-   |---|---|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `ALLOWED_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs who can open doors (leave empty for open access) |
-| `ADMIN_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs who can manage authorization |
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | **Required.** Bot token from @BotFather |
+| `ALLOWED_TELEGRAM_USER_IDS` | **Required.** Comma-separated Telegram user IDs allowed to use the bot |
+| `ADMIN_TELEGRAM_USER_IDS` | Comma-separated admin Telegram user IDs; every admin must also be allowed |
 | `DOMONAP_PHONE` | Your Domonap account phone number |
 | `DOMONAP_REGISTER_DEVICE_TOKEN` | Call `UpdateDeviceToken` after SMS authorization. Default: `false` to preserve official-app push routing |
 | `STORAGE_PATH` | Path to SQLite database file (default: `data/storage.db`) |
 | `LOG_LEVEL` | Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO) |
 | `CALL_WATCHER_ENABLED` | Enable incoming call notifications (default: true) |
 
-> ⚠️ **`ALLOWED_TELEGRAM_USER_IDS` is required.** The bot refuses to start
-> if empty. Set at least one Telegram user ID before deploying,
-> especially before exposing the bot token.
+> ⚠️ **Fail-closed access:** `ALLOWED_TELEGRAM_USER_IDS` must contain at least one
+> Telegram user ID. If it is empty, the application refuses to start; an empty list
+> never enables public/open access.
+
+> **Admin invariant:** each ID in `ADMIN_TELEGRAM_USER_IDS` must also be present in
+> the effective allowed-user set. Runtime user/admin changes made through the admin UI
+> are persisted in SQLite.
 
 > **Official app coexistence:** keep `DOMONAP_REGISTER_DEVICE_TOKEN=false` unless
 > you explicitly want this bot authorization to register its device token for push delivery.
@@ -60,9 +64,9 @@ Telegram bot for controlling Domonap intercom. Works standalone — no Home Assi
 | Command | Access | Description |
 |---|---|---|
 | `/start` | allowed | Welcome menu with inline keyboard: Doors, Calls, Admin (if admin) |
-| `/status` | allowed | Authentication status: safe info only) |
+| `/status` | allowed | Authentication status; phone number is masked |
 | `/doors` | allowed | List available doors |
-| `/open` | allowed | Open a door (single door auto-opens; multiple doors show selection keyboard |
+| `/open` | allowed | Open a door; a single door auto-opens, multiple doors show a selection keyboard |
 | `/auth` | admin | Request SMS code from Domonap |
 | `/code <code>` | admin | Confirm SMS code and save tokens |
 | `/logout` | admin | Clear saved tokens |
@@ -79,55 +83,57 @@ The bot uses inline keyboards for all interactions (no complex menu states).
 
 ### Doors
 
-- **Door list** — tap a door to see details (- **Door detail** — shows door info:
+- **Door list** — tap a door to see details
+- **Door detail** — shows door info:
   - **🔓 Open** — opens the door (cooldown-limited)
   - **📹 Video** — opens video stream URL (if available)
 
 ### Calls
 
-- **Call list** — paginated call log (All/Missed filter toggle)
-- **Call detail** — shows caller info, photo, video
+- **Call list** — server-aware paginated call log with All/Missed filter
+- **Call detail** — shows caller info, photo and video when available
   - **📞 Answer** — answer the call
   - **🔴 Reject** — end call
-  - **🔓 Open door** — open door (if linked)
-  - **📹 Video** — open video stream URL (if available)
+  - **🔓 Open door** — open the linked door
+  - **📹 Video** — open video stream URL
 
-### Admin panel (admins only)
+### Admin panel
 
 - **👥 Users** → user management
-  - **👤 {id}** — user row (admin badge 👑 if if admin)
-  - **❌**** — remove user (tap twice to confirm)
-  - **➕ Add user** — add Telegram user ID as regular (non-admin) user
-  - **⬆ Grant admin** — promote existing user to admin (only shown for non-admins)
+  - add a regular user
+  - grant admin rights to an existing allowed user
+  - remove a user with double confirmation
+  - the last active administrator cannot be removed
 - **🔑 /auth** — request SMS code from Domonap
-- **🚪 /logout** — clear stored tokens
+- **🚪 /logout** — clear the Domonap session
 
 Authorization uses Domonap's SMS-based flow:
 
-1. Set `DOMONAP_PHONE` and `ADMIN_TELEGRAM_USER_IDS` in `.env`.
-2. Send `/auth` to the bot. An SMS code is sent to your phone (number is masked in the response).
-3. Send `/code <sms_code>` with the code from SMS. The message containing the code is automatically deleted for security.
+1. Set `DOMONAP_PHONE` and an allowed admin ID in `.env`.
+2. Send `/auth` to the bot. An SMS code is sent to your phone; the number is masked in responses and logs.
+3. Send `/code <sms_code>`. The message containing the code is automatically deleted when possible.
 4. Use `/status` to verify the connection.
 
-Tokens are stored in the SQLite database (`data/storage.db` by default) and refreshed automatically when needed. Use `/logout` to clear tokens at any time.
+Tokens are stored in SQLite (`data/storage.db` by default) and refreshed automatically when needed. Use `/logout` to clear them.
 
-> ⚠️ SMS codes and tokens are never written to logs. If you enable `LOG_LEVEL=DEBUG`, be aware that aiogram logs raw message text at this level.
+> ⚠️ SMS codes and tokens are not intentionally written by the bot to application logs.
+> If you enable `LOG_LEVEL=DEBUG`, remember that third-party framework debug logging can be more verbose.
 
 ## Incoming Call Notifications
 
-When `CALL_WATCHER_ENABLED=true` (default), the bot monitors incoming calls and sends notifications to all `ALLOWED_TELEGRAM_USER_IDS`:
+When `CALL_WATCHER_ENABLED=true` (default), the bot monitors incoming calls and sends notifications to the current runtime allow-list:
 
-- Door name/address (if available)
-- Call time
-- Photo/preview (if available via API)
-- **"Открыть" button** — opens the door with one tap
-- **"Видео" button** — opens video stream URL (if available)
+- door name/address when available;
+- call time;
+- photo/preview when available;
+- **Open** button;
+- **Video** button when a stream URL is available.
 
-**How it works:**
-1. The bot first tries a real-time connection via SignalR Notification Hub.
-2. If SignalR is unavailable, it falls back to polling the call log every 5 seconds.
-3. Duplicate call IDs are ignored to prevent repeated notifications.
+How it works:
+
+1. A real SignalR WebSocket connection to the Domonap Notification Hub is the primary source.
+2. If the SignalR session fails or ends, the watcher temporarily falls back to call-log polling and then reconnects.
+3. Call IDs are deduplicated using a bounded ordered cache.
+4. Door metadata is refreshed periodically and immediately when an unknown `doorId` appears.
 
 Disable with `CALL_WATCHER_ENABLED=false` in `.env`.
-
-No sensitive data (tokens, SIP credentials, internal headers) is ever included in notifications.
