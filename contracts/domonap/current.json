@@ -1,15 +1,39 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source": {
     "package_name": "com.domonap.app",
     "app_version_code": 9850,
     "release_date": "2026-07-30",
-    "verification": "runtime-baseline-awaiting-apk-verification"
+    "verification": "apk-verified-partial-static",
+    "verified_at": "2026-08-23",
+    "apk_analysis": {
+      "source": "rustore-v2",
+      "signer_sha256_verified": true,
+      "transport_tls_verified": false,
+      "jadx_exit_code": 3,
+      "files": 27330,
+      "sources": 23405,
+      "static_files_scanned": 25700
+    }
   },
-  "hosts": [
+  "trusted_hosts": [
     "api.domonap.ru"
   ],
-  "headers": [
+  "observed_hosts": [
+    "api.domonap.ru",
+    "dev-api.domonap.ru",
+    "www.domonap.com",
+    "www.domonap.ru"
+  ],
+  "required_headers": [
+    "dom-app",
+    "dom-platform",
+    "instanceId"
+  ],
+  "observed_headers": [
+    "Authorization",
+    "User-Agent",
+    "device-info",
     "dom-app",
     "dom-platform",
     "instanceId"
@@ -28,17 +52,58 @@
     "POST /communication-api/Call/NotifyCallAnswered",
     "POST /communication-api/Call/NotifyCallEnded"
   ],
+  "observed_endpoints": [
+    "UNKNOWN /client-api/Device/OpenRelayByDoorId",
+    "UNKNOWN /client-api/Device/OpenRelayByKeyId",
+    "UNKNOWN /client-api/Face/CreateFace",
+    "UNKNOWN /client-api/Face/DeleteFace",
+    "UNKNOWN /client-api/Key/ActivateSharedKeyLink",
+    "UNKNOWN /client-api/Key/CreateInvitationKeyByPhoneNumber",
+    "UNKNOWN /client-api/Key/CreateKeyApplication",
+    "UNKNOWN /client-api/Key/DeactivateKey",
+    "UNKNOWN /client-api/Key/EditInvitationSpan",
+    "UNKNOWN /client-api/Key/GetKeyIdByPropertyId",
+    "UNKNOWN /client-api/Key/RenameKey",
+    "UNKNOWN /client-api/Key/SetKeyWeight",
+    "UNKNOWN /client-api/Key/ShareInvitationKey",
+    "UNKNOWN /client-api/Notification/GetNotification",
+    "UNKNOWN /client-api/Panel/GetPanel",
+    "UNKNOWN /client-api/Property/GetPropertyMarketOpenData",
+    "UNKNOWN /client-api/VideoCamera/AddVideoCameraToFolder",
+    "UNKNOWN /client-api/VideoCamera/CreateVideoCameraFolder",
+    "UNKNOWN /client-api/VideoCamera/DeleteVideoCameraFolder",
+    "UNKNOWN /client-api/VideoCamera/GetVideoArea",
+    "UNKNOWN /client-api/VideoCamera/RemoveVideoCameraFromFolder",
+    "UNKNOWN /client-api/VideoCamera/RenameVideoCameraFolder",
+    "UNKNOWN /communication-api/Call/NotifyCallEnded",
+    "UNKNOWN /communication-api/Support/CreateTicket",
+    "UNKNOWN /communication-api/Support/EvaluateTicketSupport",
+    "UNKNOWN /communication-api/Support/GetTicket",
+    "UNKNOWN /communication-api/Support/SendTicketNotification",
+    "UNKNOWN /communication-api/Support/SetTicketReturned",
+    "UNKNOWN /sso-api/Authorization/Authorize",
+    "UNKNOWN /sso-api/Authorization/ConfirmAuthorization",
+    "UNKNOWN /sso-api/Authorization/ConfirmAuthorizationCode",
+    "UNKNOWN /sso-api/Authorization/Logout",
+    "UNKNOWN /sso-api/Authorization/UpdateDeviceToken",
+    "UNKNOWN /sso-api/PhoneNumber/EditPhoneNumber",
+    "UNKNOWN /sso-api/PhoneNumber/SendConfirmCodeChangePhoneNumber"
+  ],
   "signalr": {
     "hub": "/notificationHub",
     "target": "ReceivePush",
     "events": [
       "DomofonCalling",
+      "DomofonCallAnswered",
       "DomofonCallEnded"
     ]
   },
   "notes": [
-    "The public Android release is 9850 as of 2026-07-30.",
-    "This baseline describes the bot protocol implementation and is intentionally not marked APK-verified yet.",
-    "APK analysis may discover additional official-app endpoints and headers; additions are informational unless they become required for existing operations."
+    "The public Android release 9850 was analyzed from a RuStore v2 APK on 2026-08-23.",
+    "The APK CDN TLS chain did not validate on the GitHub runner; the downloaded APK was accepted only after its Android signer SHA-256 matched the fingerprint obtained independently from the TLS-verified RuStore backend.",
+    "JADX returned partial-decompilation exit code 3 but produced 23405 source files; static marker extraction scanned 25700 text files.",
+    "The endpoints list is the bot runtime contract. observed_endpoints contains only paths proven by static APK evidence, so an endpoint absent from static output is not automatically treated as removed from the live API.",
+    "dev-api.domonap.ru and www.domonap.* are observed markers only and are never trusted automatically.",
+    "device-info is present in the official application but is not added to bot requests unless runtime evidence shows it becomes required."
   ]
 }
