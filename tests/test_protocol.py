@@ -5,6 +5,7 @@ def test_profile_is_bound_to_current_public_release() -> None:
     assert CURRENT_PROFILE.source_app_version_code == 9850
     assert CURRENT_PROFILE.base_url == "https://api.domonap.ru"
     assert CURRENT_PROFILE.trusted_host == "api.domonap.ru"
+    assert CURRENT_PROFILE.verification == "apk-verified-partial-static"
 
 
 def test_readonly_profile_excludes_physical_and_call_mutations() -> None:
@@ -20,4 +21,8 @@ def test_readonly_profile_excludes_physical_and_call_mutations() -> None:
 def test_known_signalr_contract_is_explicit() -> None:
     assert CURRENT_PROFILE.signalr_hub == "/notificationHub"
     assert CURRENT_PROFILE.signalr_target == "ReceivePush"
-    assert set(CURRENT_PROFILE.signalr_events) == {"DomofonCalling", "DomofonCallEnded"}
+    assert set(CURRENT_PROFILE.signalr_events) == {
+        "DomofonCalling",
+        "DomofonCallAnswered",
+        "DomofonCallEnded",
+    }
