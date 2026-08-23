@@ -250,47 +250,29 @@ def _build_message_handlers(client: MagicMock) -> dict[str, object]:
     return {h.callback.__name__: h.callback for h in router.message.handlers}
 
 
-class TestImportTokens:
-    async def test_import_tokens_requires_both_tokens(self) -> None:
+class TestAuthSurface:
+    def test_import_tokens_command_is_not_registered(self) -> None:
+        handlers = _build_message_handlers(MagicMock())
+        assert "cmd_import_tokens" not in handlers
+
+    async def test_status_masks_phone_number(self) -> None:
         client = MagicMock()
+        client.access_token = "access"
+        client.refresh_token = None
+        client.has_valid_refresh_token = MagicMock(return_value=False)
+        client.get_username = AsyncMock(return_value="user")
+        client.phone = "+79991234567"
         handlers = _build_message_handlers(client)
 
         msg = _make_message(user_id=1)
-        msg.text = "/import_tokens only_access"
-
-        await handlers["cmd_import_tokens"](msg)
+        msg.text = "/status"
+        await handlers["cmd_status"](msg)
 
         msg.answer.assert_awaited_once()
-        assert "Usage: /import_tokens" in msg.answer.call_args[0][0]
-
-    async def test_import_tokens_saves_session(self) -> None:
-        client = MagicMock()
-        client.set_tokens = MagicMock()
-        client.phone = "+79991234567"
-        client.device_token = "device-token"
-        client.instance_id = "instance-id"
-        client.token_storage = MagicMock()
-        client.token_storage.save = AsyncMock()
-        handlers = _build_message_handlers(client)
-
-        msg = _make_message(user_id=1)
-        msg.text = "/import_tokens access-123 refresh-456"
-        msg.delete = AsyncMock()
-
-        await handlers["cmd_import_tokens"](msg)
-
-        client.set_tokens.assert_called_once_with("access-123", "refresh-456", None)
-        client.token_storage.save.assert_awaited_once()
-        session = client.token_storage.save.await_args.args[0]
-        assert session.access_token == "access-123"
-        assert session.refresh_token == "refresh-456"
-        assert session.phone == "+79991234567"
-        assert session.device_token == "device-token"
-        assert session.instance_id == "instance-id"
-        msg.delete.assert_awaited_once()
-        msg.answer.assert_awaited_once_with(
-            "✅ Tokens imported successfully. Use /status to verify."
-        )
+        text = msg.answer.await_args.args[0]
+        assert "+799***67" in text
+        assert "+79991234567" not in text
+        assert "Authenticated: ✅" in text
 
 
 class TestAnswerAndEndCall:
@@ -398,5 +380,3 @@ class TestAnswerAndEndCall:
 
         client.answer_call.assert_awaited_once()
         client.end_call.assert_awaited_once()
-
-
