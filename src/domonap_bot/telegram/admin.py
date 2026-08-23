@@ -162,7 +162,6 @@ def register_admin_handlers(
             await callback.answer("Некорректный пользователь", show_alert=True)
             return
 
-        await callback.answer("Назначаю администратора…")
         async with role_lock:
             if not await storage.is_user_allowed(user_id):
                 await callback.answer("У пользователя больше нет доступа", show_alert=True)
@@ -170,6 +169,8 @@ def register_admin_handlers(
             if not await storage.is_user_admin(user_id):
                 await storage.set_user_admin(user_id)
                 admin_access.add_user(user_id)
+
+        await callback.answer("Права администратора выданы")
         await _render_user_detail(message, user_id)
 
     @router.callback_query(F.data.startswith("a:rev:"))
@@ -204,7 +205,10 @@ def register_admin_handlers(
                 await _render_user_detail(message, user_id)
                 return
             if len(admin_ids) <= 1:
-                await callback.answer("Нельзя снять права у последнего администратора", show_alert=True)
+                await callback.answer(
+                    "Нельзя снять права у последнего администратора",
+                    show_alert=True,
+                )
                 return
             await storage.remove_user_admin(user_id)
             admin_access.remove_user(user_id)
