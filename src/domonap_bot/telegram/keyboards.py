@@ -190,7 +190,14 @@ def user_list_keyboard(
     if admin_users is not None:
         non_admin = [uid for uid in users if uid not in admin_users]
         if non_admin:
-            rows.append([InlineKeyboardButton(text="⬆️ Назначить администратора", callback_data="a:grant")])
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="⬆️ Назначить администратора",
+                        callback_data="a:grant",
+                    )
+                ]
+            )
     rows.append([InlineKeyboardButton(text="← Управление", callback_data="a:panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
