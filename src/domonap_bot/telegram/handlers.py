@@ -16,10 +16,10 @@ from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.auth_flow import (
     AuthStates,
-    mask_phone as _mask_phone,
     request_sms_code,
     submit_sms_code,
 )
+from domonap_bot.telegram.auth_flow import mask_phone as _mask_phone
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error as _describe_error
