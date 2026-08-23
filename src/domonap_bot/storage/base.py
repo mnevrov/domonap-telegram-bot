@@ -38,6 +38,9 @@ class Storage(ABC):
     async def is_user_admin(self, telegram_id: int) -> bool:
         ...
 
+    async def remove_user_admin(self, telegram_id: int) -> None:
+        await self.delete(f"access:admin:{telegram_id}")
+
     @abstractmethod
     async def list_allowed_users(self) -> list[int]:
         ...

@@ -9,10 +9,13 @@ from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
+from domonap_bot.telegram.invites import InviteManager
 from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text, send_view
 from domonap_bot.telegram.ui.views import View, home_view
 
 logger = logging.getLogger(__name__)
+
+_INVITE_PAYLOAD_PREFIX = "invite_"
 
 
 def register_menu_handlers(
@@ -22,8 +25,10 @@ def register_menu_handlers(
     access: AccessControl,
     admin_access: AccessControl,
     cooldown: CooldownManager,
+    invites: InviteManager | None = None,
 ) -> None:
-    del storage, cooldown
+    del cooldown
+    invite_manager = invites if invites is not None else InviteManager(storage)
 
     def current_home(user_id: int) -> View:
         return home_view(
@@ -32,9 +37,40 @@ def register_menu_handlers(
         )
 
     @router.message(Command("start"))
-    @access.require_access
     async def cmd_start(message: Message) -> None:
         user_id = message.from_user.id if message.from_user else 0
+        parts = (message.text or "").split(maxsplit=1)
+        payload = parts[1].strip() if len(parts) == 2 else ""
+
+        if payload.startswith(_INVITE_PAYLOAD_PREFIX) and user_id > 0:
+            if access.is_allowed(user_id):
+                await send_view(message, current_home(user_id))
+                return
+
+            token = payload.removeprefix(_INVITE_PAYLOAD_PREFIX)
+            if await invite_manager.consume(token):
+                await storage.set_user_allowed(user_id)
+                access.add_user(user_id)
+                home = current_home(user_id)
+                await send_view(
+                    message,
+                    View(
+                        text=f"✅ Доступ активирован.\n\n{home.text}",
+                        keyboard=home.keyboard,
+                    ),
+                )
+                return
+
+            await message.answer(
+                "Приглашение недействительно или уже истекло. "
+                "Попросите администратора создать новое."
+            )
+            return
+
+        if not access.is_allowed(user_id):
+            await message.answer("Доступ к боту не разрешён.")
+            return
+
         await send_view(message, current_home(user_id))
 
     @router.callback_query(F.data == "m:main")
