@@ -204,6 +204,11 @@ def register_admin_handlers(
             await callback.answer("Message unavailable", show_alert=True)
             return
 
+        if admin_access.is_allowed(uid) and len(admin_access.user_ids()) <= 1:
+            _pending_removals.pop(admin_id, None)
+            await callback.answer("Cannot remove the last admin.", show_alert=True)
+            return
+
         _pending_removals.pop(admin_id, None)
         await storage.remove_user(uid)
         if access is not None:
