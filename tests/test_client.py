@@ -1,9 +1,11 @@
+import json
+
 import httpx
 import pytest
 import respx
 from httpx import Response
 
-from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.client import DOOR_KEY_TYPES, DomonapClient
 from domonap_bot.domonap.exceptions import (
     ApiError,
     NetworkError,
@@ -96,40 +98,134 @@ class TestClientGetDoors:
     @respx.mock
     async def test_success(self, client: DomonapClient) -> None:
         route = respx.post("https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType").mock(
-            return_value=Response(200, json={
-                "results": [
-                    {"id": "k1", "doorId": "d1", "name": "Door 1"},
-                    {"id": "k2", "doorId": "d2", "name": "Door 2", "domofonPublicPin": "1111"},
-                ],
-                "currentPage": 1,
-                "perPage": 100,
-                "total": 2,
-            })
+            return_value=Response(
+                200,
+                json={
+                    "results": [
+                        {"id": "k1", "doorId": "d1", "name": "Door 1"},
+                        {
+                            "id": "k2",
+                            "doorId": "d2",
+                            "name": "Door 2",
+                            "domofonPublicPin": "1111",
+                        },
+                    ],
+                    "currentPage": 1,
+                    "perPage": 100,
+                    "total": 2,
+                },
+            )
         )
+
         doors = await client.get_doors()
-        assert route.called
+
+        assert route.call_count == len(DOOR_KEY_TYPES)
+        requested_types = [json.loads(call.request.content)["keysType"] for call in route.calls]
+        assert requested_types == list(DOOR_KEY_TYPES)
         assert len(doors) == 2
         assert doors[0].id == "k1"
         assert doors[0].name == "Door 1"
         assert doors[1].domofon_public_pin == "1111"
 
     @respx.mock
+    async def test_reads_all_pages_and_deduplicates_by_door_id(
+        self, client: DomonapClient
+    ) -> None:
+        calls: list[tuple[int, int]] = []
+
+        def responder(request: httpx.Request) -> Response:
+            body = json.loads(request.content)
+            keys_type = int(body["keysType"])
+            current_page = int(body["currentPage"])
+            calls.append((keys_type, current_page))
+
+            if keys_type == 0 and current_page == 1:
+                return Response(
+                    200,
+                    json={
+                        "results": [{"id": "key-1", "doorId": "door-1", "name": "Main"}],
+                        "currentPage": 1,
+                        "perPage": 1,
+                        "total": 2,
+                    },
+                )
+            if keys_type == 0 and current_page == 2:
+                return Response(
+                    200,
+                    json={
+                        "results": [{"id": "key-2", "doorId": "door-2", "name": "Back"}],
+                        "currentPage": 2,
+                        "perPage": 1,
+                        "total": 2,
+                    },
+                )
+            if keys_type == 1:
+                return Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "id": "key-3",
+                                "doorId": "door-1",
+                                "name": "Main",
+                                "httpVideoUrl": "https://video.example/main",
+                            }
+                        ],
+                        "currentPage": 1,
+                        "perPage": 100,
+                        "total": 1,
+                    },
+                )
+            return Response(
+                200,
+                json={
+                    "results": [],
+                    "currentPage": 1,
+                    "perPage": 100,
+                    "total": 0,
+                },
+            )
+
+        respx.post("https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType").mock(
+            side_effect=responder
+        )
+
+        doors = await client.get_doors()
+
+        assert calls == [
+            (0, 1),
+            (0, 2),
+            (1, 1),
+            (2, 1),
+            (4, 1),
+            (5, 1),
+            (6, 1),
+        ]
+        assert [door.door_id for door in doors] == ["door-1", "door-2"]
+        assert doors[0].id == "key-1"
+        assert doors[0].http_video_url == "https://video.example/main"
+
+    @respx.mock
     async def test_unauthorized_triggers_refresh_and_retry(self, client: DomonapClient) -> None:
         paged_url = "https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType"
         refresh_url = "https://api.domonap.ru/sso-api/Authorization/RefreshToken"
 
+        success_response = {
+            "results": [{"id": "k1", "doorId": "d1", "name": "Door"}],
+        }
         respx.post(paged_url).side_effect = [
             Response(401, json={"error": "unauthorized"}),
-            Response(200, json={
-                "results": [{"id": "k1", "doorId": "d1", "name": "Door"}],
-            }),
+            *[Response(200, json=success_response) for _ in DOOR_KEY_TYPES],
         ]
         respx.post(refresh_url).mock(
-            return_value=Response(200, json={
-                "accessToken": "new_access",
-                "refreshToken": "new_refresh",
-                "refreshExpirationDate": "2027-06-01T00:00:00+03:00",
-            })
+            return_value=Response(
+                200,
+                json={
+                    "accessToken": "new_access",
+                    "refreshToken": "new_refresh",
+                    "refreshExpirationDate": "2027-06-01T00:00:00+03:00",
+                },
+            )
         )
 
         doors = await client.get_doors()
@@ -188,7 +284,6 @@ class TestSignalRReconnect:
     ) -> None:
         import httpx as httpx_module
 
-        # Speed up the test: skip the real backoff sleep.
         async def no_sleep(_seconds: float) -> None:
             return None
 
@@ -198,9 +293,7 @@ class TestSignalRReconnect:
             "https://api.domonap.ru/notificationHub/negotiate?negotiateVersion=1"
         ).mock(return_value=Response(200, json={"connectionId": "conn-1"}))
 
-        hub_route = respx.get(
-            "https://api.domonap.ru/notificationHub?id=conn-1"
-        )
+        hub_route = respx.get("https://api.domonap.ru/notificationHub?id=conn-1")
         hub_route.side_effect = [
             httpx_module.ConnectError("boom"),
             Response(
@@ -212,9 +305,9 @@ class TestSignalRReconnect:
         events = []
         async for payload in client.listen_events():
             events.append(payload)
-            client._closed = True  # stop after first successful event
+            client._closed = True
 
-        assert negotiate_route.call_count == 2  # re-negotiated after the HTTP error
+        assert negotiate_route.call_count == 2
         assert len(events) == 1
         assert events[0].call_id == "c1"
 
@@ -223,12 +316,15 @@ class TestClientCallLogs:
     @respx.mock
     async def test_success(self, client: DomonapClient) -> None:
         respx.post("https://api.domonap.ru/client-api/CallLog/GetCallLogs").mock(
-            return_value=Response(200, json={
-                "results": [
-                    {"callId": "c1", "answered": True},
-                    {"callId": "c2", "answered": False, "caller": "+70000000000"},
-                ],
-            })
+            return_value=Response(
+                200,
+                json={
+                    "results": [
+                        {"callId": "c1", "answered": True},
+                        {"callId": "c2", "answered": False, "caller": "+70000000000"},
+                    ],
+                },
+            )
         )
         logs = await client.get_call_logs()
         assert len(logs) == 2
@@ -296,12 +392,8 @@ class TestClientRefreshFailure:
         paged_url = "https://api.domonap.ru/client-api/Key/GetPagedKeysByKeysType"
         refresh_url = "https://api.domonap.ru/sso-api/Authorization/RefreshToken"
 
-        respx.post(paged_url).mock(
-            return_value=Response(401, json={"error": "unauthorized"})
-        )
-        respx.post(refresh_url).mock(
-            return_value=Response(400, json={"error": "bad request"})
-        )
+        respx.post(paged_url).mock(return_value=Response(401, json={"error": "unauthorized"}))
+        respx.post(refresh_url).mock(return_value=Response(400, json={"error": "bad request"}))
 
         with pytest.raises(SessionExpiredError):
             await client.get_doors()
@@ -334,9 +426,7 @@ class TestFetchExternalBytes:
 
     @respx.mock
     async def test_not_found(self, client: DomonapClient) -> None:
-        respx.get("https://example.com/bad").mock(
-            return_value=Response(404)
-        )
+        respx.get("https://example.com/bad").mock(return_value=Response(404))
         result = await client.fetch_external_bytes("https://example.com/bad")
         assert result["ok"] is False
 
