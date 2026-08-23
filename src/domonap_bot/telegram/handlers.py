@@ -349,17 +349,18 @@ async def _auto_open_door(
     client: DomonapClient,
     cooldown: CooldownManager,
 ) -> None:
-    if not cooldown.is_ready(user_id, door.id):
-        remaining = cooldown.remaining(user_id, door.id)
+    door_id = door.door_id
+    if not cooldown.is_ready(user_id, door_id):
+        remaining = cooldown.remaining(user_id, door_id)
         await message.answer(
             f"Please wait {remaining:.0f}s before opening this door again."
         )
         return
 
-    cooldown.set(user_id, door.id)
+    cooldown.set(user_id, door_id)
 
     try:
-        success = await client.open_door(door.id)
+        success = await client.open_door(door_id)
     except DomonapError as exc:
         await message.answer(_describe_error(exc))
         return

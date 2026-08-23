@@ -87,7 +87,7 @@ def register_door_handlers(
             await callback.answer()
             return
 
-        door = next((d for d in doors if d.id == door_id), None)
+        door = next((d for d in doors if d.door_id == door_id), None)
         if not door:
             await message.edit_text("Door not found.", reply_markup=back_keyboard("d:p:0"))
             await callback.answer()
