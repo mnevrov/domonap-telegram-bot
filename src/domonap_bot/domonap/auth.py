@@ -52,9 +52,8 @@ class DomonapAuth:
         if resp.is_success:
             return True
 
-        body = resp.text[:500]
-        logger.warning("SMS request failed (%s): %s", resp.status_code, body)
-        raise ApiError(f"SMS request failed ({resp.status_code}): {body}")
+        logger.warning("SMS request failed with HTTP %s", resp.status_code)
+        raise ApiError(f"HTTP {resp.status_code}")
 
     async def confirm_code(
         self,
@@ -84,8 +83,7 @@ class DomonapAuth:
             raise NetworkError(f"HTTP error: {exc}") from exc
 
         if not resp.is_success:
-            body = resp.text[:500]
-            raise AuthenticationError(f"Code confirmation failed ({resp.status_code}): {body}")
+            raise AuthenticationError(f"HTTP {resp.status_code}")
 
         data: dict[str, Any] = resp.json()
         return data
