@@ -47,8 +47,8 @@ async def test_negative_page_is_clamped_to_first_page() -> None:
     await handler(callback)  # type: ignore[operator]
 
     buttons = _button_texts(callback)
-    assert "🚪 Door 1" in buttons
-    assert "🚪 Door 11" not in buttons
+    assert "🔓 Door 1" in buttons
+    assert "🔓 Door 11" not in buttons
     assert "1/2" in buttons
 
 
@@ -59,6 +59,6 @@ async def test_out_of_range_page_is_clamped_to_last_page() -> None:
     await handler(callback)  # type: ignore[operator]
 
     buttons = _button_texts(callback)
-    assert "🚪 Door 11" in buttons
-    assert "🚪 Door 1" not in buttons
+    assert "🔓 Door 11" in buttons
+    assert "🔓 Door 1" not in buttons
     assert "2/2" in buttons

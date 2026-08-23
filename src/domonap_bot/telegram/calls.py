@@ -9,6 +9,7 @@ from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import back_keyboard
+from domonap_bot.telegram.navigation import NavigationStore
 from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text
 from domonap_bot.telegram.ui.views import View, call_detail_view, calls_view
 from domonap_bot.telegram.url_policy import safe_http_url
@@ -16,8 +17,6 @@ from domonap_bot.telegram.url_policy import safe_http_url
 logger = logging.getLogger(__name__)
 
 _PER_PAGE = 10
-# Per-user filter state: True = missed only, False = all
-user_call_filter: dict[int, bool] = {}
 
 
 def register_call_handlers(
@@ -25,8 +24,10 @@ def register_call_handlers(
     client: DomonapClient,
     access: AccessControl,
     cooldown: CooldownManager,
+    navigation: NavigationStore | None = None,
 ) -> None:
     del cooldown
+    nav = navigation if navigation is not None else NavigationStore()
 
     async def _render_call_list(callback: CallbackQuery, page: int) -> None:
         message = editable_callback_message(callback)
@@ -34,7 +35,8 @@ def register_call_handlers(
             return
 
         uid = callback.from_user.id if callback.from_user else 0
-        filter_missed = user_call_filter.get(uid, False)
+        state = nav.get(uid)
+        filter_missed = state.call_filter_missed
 
         try:
             page_data = await client.get_call_logs_page(
@@ -59,6 +61,8 @@ def register_call_handlers(
                 ),
             )
             return
+
+        nav.set_call_view(uid, page=page, missed=filter_missed)
 
         door_map: dict[str, str] = {}
         try:
@@ -93,8 +97,7 @@ def register_call_handlers(
         if not data:
             await acknowledge_callback(callback, "Некорректные данные", show_alert=True)
             return
-        message = editable_callback_message(callback)
-        if message is None:
+        if editable_callback_message(callback) is None:
             await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
 
@@ -104,6 +107,17 @@ def register_call_handlers(
         except ValueError:
             page = 0
 
+        await acknowledge_callback(callback)
+        await _render_call_list(callback, page)
+
+    @router.callback_query(F.data == "c:back")
+    @access.require_access
+    async def callback_call_back(callback: CallbackQuery) -> None:
+        if editable_callback_message(callback) is None:
+            await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
+            return
+        uid = callback.from_user.id if callback.from_user else 0
+        page = nav.get(uid).call_page
         await acknowledge_callback(callback)
         await _render_call_list(callback, page)
 
@@ -120,7 +134,7 @@ def register_call_handlers(
 
         uid = callback.from_user.id if callback.from_user else 0
         mode = data.removeprefix("c:f:")
-        user_call_filter[uid] = mode == "missed"
+        nav.set_call_view(uid, page=0, missed=mode == "missed")
 
         await acknowledge_callback(callback)
         await _render_call_list(callback, 0)
@@ -146,7 +160,7 @@ def register_call_handlers(
                 message,
                 View(
                     "Не удалось загрузить звонок.",
-                    back_keyboard("c:p:0", "← Звонки"),
+                    back_keyboard("c:back", "← Звонки"),
                 ),
             )
             return
@@ -154,7 +168,7 @@ def register_call_handlers(
         if entry is None:
             await edit_text(
                 message,
-                View("Звонок не найден.", back_keyboard("c:p:0", "← Звонки")),
+                View("Звонок не найден.", back_keyboard("c:back", "← Звонки")),
             )
             return
 

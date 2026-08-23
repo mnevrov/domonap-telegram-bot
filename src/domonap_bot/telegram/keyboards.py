@@ -35,10 +35,20 @@ def main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
 
 
 def door_list_keyboard(doors: list[DoorKey], page: int, total_pages: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=f"🚪 {door.name}", callback_data=f"d:det:{door.door_id}")]
-        for door in doors
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for door in doors:
+        row = [
+            InlineKeyboardButton(
+                text=f"🔓 {door.name}",
+                callback_data=f"d:open:{door.door_id}",
+                style="success",
+            )
+        ]
+        video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+        if video_url:
+            row.append(InlineKeyboardButton(text="📹", url=video_url))
+        rows.append(row)
+
     if total_pages > 1:
         nav: list[InlineKeyboardButton] = []
         if page > 0:
@@ -64,7 +74,7 @@ def door_detail_keyboard(door: DoorKey) -> InlineKeyboardMarkup:
     video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
     if video_url:
         rows.append([InlineKeyboardButton(text="📹 Камера", url=video_url)])
-    rows.append([InlineKeyboardButton(text="← Двери", callback_data="d:p:0")])
+    rows.append([InlineKeyboardButton(text="← Двери", callback_data="d:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -149,7 +159,7 @@ def call_detail_keyboard(
     safe_video_url = safe_http_url(video_url)
     if safe_video_url:
         rows.append([InlineKeyboardButton(text="📹 Камера", url=safe_video_url)])
-    rows.append([InlineKeyboardButton(text="← Звонки", callback_data="c:p:0")])
+    rows.append([InlineKeyboardButton(text="← Звонки", callback_data="c:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

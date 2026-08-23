@@ -6,9 +6,10 @@ from aiogram.types import CallbackQuery, Message, User
 
 from domonap_bot.domonap.models import CallLogEntry, CallLogPage
 from domonap_bot.telegram.access import AccessControl
-from domonap_bot.telegram.calls import register_call_handlers, user_call_filter
+from domonap_bot.telegram.calls import register_call_handlers
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import call_list_keyboard
+from domonap_bot.telegram.navigation import NavigationStore
 
 
 def _make_callback(user_id: int) -> MagicMock:
@@ -28,13 +29,24 @@ def _handlers(router: Router) -> dict[str, object]:
     }
 
 
-def _register(router: Router, client: MagicMock) -> None:
-    register_call_handlers(router, client, AccessControl([1]), CooldownManager())
+def _register(
+    router: Router,
+    client: MagicMock,
+    navigation: NavigationStore | None = None,
+) -> NavigationStore:
+    nav = navigation or NavigationStore()
+    register_call_handlers(
+        router,
+        client,
+        AccessControl([1]),
+        CooldownManager(),
+        nav,
+    )
+    return nav
 
 
 class TestCallList:
     async def test_call_list_empty(self) -> None:
-        user_call_filter.clear()
         router = Router()
         client = MagicMock()
         client.get_call_logs_page = AsyncMock(
@@ -45,7 +57,7 @@ class TestCallList:
 
         cb = _make_callback(user_id=1)
         cb.data = "c:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_call_list"](cb)
 
         text = cb.message.edit_text.call_args[0][0]
         assert "Звонки" in text
@@ -53,7 +65,6 @@ class TestCallList:
         cb.answer.assert_awaited_once()
 
     async def test_call_list_uses_buttons_without_duplicate_rows_in_text(self) -> None:
-        user_call_filter.clear()
         router = Router()
         client = MagicMock()
         client.get_call_logs_page = AsyncMock(
@@ -77,7 +88,7 @@ class TestCallList:
 
         cb = _make_callback(user_id=1)
         cb.data = "c:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_call_list"](cb)
 
         text = cb.message.edit_text.call_args[0][0]
         keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
@@ -89,7 +100,6 @@ class TestCallList:
         )
 
     async def test_call_list_uses_server_total_for_navigation(self) -> None:
-        user_call_filter.clear()
         router = Router()
         client = MagicMock()
         client.get_call_logs_page = AsyncMock(
@@ -101,11 +111,11 @@ class TestCallList:
             )
         )
         client.get_doors = AsyncMock(return_value=[])
-        _register(router, client)
+        nav = _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "c:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_call_list"](cb)
 
         keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
         callbacks = [
@@ -115,10 +125,10 @@ class TestCallList:
             if button.callback_data
         ]
         assert "c:p:1" in callbacks
+        assert nav.get(1).call_page == 0
         assert any(button.text == "1/3" for row in keyboard.inline_keyboard for button in row)
 
-    async def test_out_of_range_page_clamps_to_last_server_page(self) -> None:
-        user_call_filter.clear()
+    async def test_out_of_range_page_clamps_and_stores_last_page(self) -> None:
         router = Router()
         client = MagicMock()
         client.get_call_logs_page = AsyncMock(
@@ -133,14 +143,15 @@ class TestCallList:
             ]
         )
         client.get_doors = AsyncMock(return_value=[])
-        _register(router, client)
+        nav = _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "c:p:98"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_call_list"](cb)
 
         assert client.get_call_logs_page.await_args_list[0].kwargs["current_page"] == 99
         assert client.get_call_logs_page.await_args_list[1].kwargs["current_page"] == 3
+        assert nav.get(1).call_page == 2
         keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
         assert any(button.text == "3/3" for row in keyboard.inline_keyboard for button in row)
 
@@ -160,7 +171,6 @@ class TestCallList:
         assert missed_filter_row[1].callback_data == "noop"
 
     async def test_call_list_acknowledges_before_remote_request(self) -> None:
-        user_call_filter.clear()
         router = Router()
         client = MagicMock()
         events: list[str] = []
@@ -180,31 +190,56 @@ class TestCallList:
 
         cb.answer = AsyncMock(side_effect=answer)
         cb.data = "c:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_call_list"](cb)
 
         assert events[:2] == ["ack", "api"]
 
-    async def test_call_filter_does_not_mutate_callback_data(self) -> None:
-        user_call_filter.clear()
+    async def test_filter_is_stored_without_mutating_callback_data(self) -> None:
         router = Router()
         client = MagicMock()
         client.get_call_logs_page = AsyncMock(
             return_value=CallLogPage(entries=[], current_page=1, per_page=10, total=0)
         )
         client.get_doors = AsyncMock(return_value=[])
-        _register(router, client)
+        nav = _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "c:f:missed"
         await _handlers(router)["callback_call_filter"](cb)
 
         assert cb.data == "c:f:missed"
-        assert user_call_filter.get(1) is True
+        assert nav.get(1).call_filter_missed is True
+        assert nav.get(1).call_page == 0
         assert client.get_call_logs_page.await_args.kwargs["missed_calls"] is True
+
+    async def test_back_restores_page_and_filter(self) -> None:
+        router = Router()
+        client = MagicMock()
+        client.get_call_logs_page = AsyncMock(
+            return_value=CallLogPage(
+                entries=[CallLogEntry(callId="call21", caller="Иван")],
+                current_page=2,
+                per_page=10,
+                total=25,
+            )
+        )
+        client.get_doors = AsyncMock(return_value=[])
+        nav = NavigationStore()
+        nav.set_call_view(1, page=1, missed=True)
+        _register(router, client, nav)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "c:back"
+        await _handlers(router)["callback_call_back"](cb)
+
+        assert client.get_call_logs_page.await_args.kwargs["current_page"] == 2
+        assert client.get_call_logs_page.await_args.kwargs["missed_calls"] is True
+        assert nav.get(1).call_page == 1
+        assert nav.get(1).call_filter_missed is True
 
 
 class TestCallDetail:
-    async def test_detail_uses_paginated_lookup(self) -> None:
+    async def test_detail_uses_paginated_lookup_and_contextual_back(self) -> None:
         router = Router()
         client = MagicMock()
         entry = CallLogEntry(callId="deep-call", caller="Иван", answered=True)
@@ -218,8 +253,10 @@ class TestCallDetail:
 
         client.find_call_log.assert_awaited_once_with("deep-call")
         text = cb.message.edit_text.call_args[0][0]
+        keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
         assert "Звонок" in text
         assert "Принят" in text
+        assert keyboard.inline_keyboard[-1][0].callback_data == "c:back"
 
     async def test_detail_sends_photo_before_deleting_old_message(self) -> None:
         router = Router()
