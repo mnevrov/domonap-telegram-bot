@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from domonap_bot.domonap.models import CallLogEntry, DoorKey
+from domonap_bot.telegram.url_policy import safe_http_url
 
 
 def door_selection_keyboard(doors: list[DoorKey]) -> InlineKeyboardMarkup:
@@ -44,10 +45,9 @@ def door_detail_keyboard(door: DoorKey) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🔓 Open", callback_data=f"d:open:{door.door_id}")],
     ]
-    if door.http_video_url or door.webrtc_video_url:
-        url = door.http_video_url or door.webrtc_video_url
-        if url:
-            rows.append([InlineKeyboardButton(text="📹 Video", url=url)])
+    video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+    if video_url:
+        rows.append([InlineKeyboardButton(text="📹 Video", url=video_url)])
     rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="d:p:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -93,8 +93,9 @@ def call_detail_keyboard(
     ]
     if door_id:
         rows.append([InlineKeyboardButton(text="🔓 Open door", callback_data=f"open:{door_id}")])
-    if video_url:
-        rows.append([InlineKeyboardButton(text="📹 Video", url=video_url)])
+    safe_video_url = safe_http_url(video_url)
+    if safe_video_url:
+        rows.append([InlineKeyboardButton(text="📹 Video", url=safe_video_url)])
     rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="c:p:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
