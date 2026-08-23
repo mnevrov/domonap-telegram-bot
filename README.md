@@ -43,6 +43,13 @@ Store that value in `STORAGE_ENCRYPTION_KEY`. Keep the key outside the repositor
 > Telegram user ID. If it is empty, the application refuses to start; an empty list
 > never enables public/open access.
 
+> **ACL precedence:** IDs from `ALLOWED_TELEGRAM_USER_IDS` are a bootstrap floor and are
+> unioned with users persisted in SQLite. Likewise, configured admins are re-applied on every
+> restart after the admin-subset validation. Removing an env-configured user/admin through the
+> running admin UI affects the current process/storage, but that identity returns after restart.
+> To revoke it permanently, remove it from `.env` as well. Users that exist only in SQLite stay
+> persisted until explicitly removed through the admin UI.
+
 > **Admin invariant:** each ID in `ADMIN_TELEGRAM_USER_IDS` must also be present in
 > the effective allowed-user set. Runtime user/admin changes made through the admin UI
 > are persisted in SQLite.
