@@ -207,7 +207,10 @@ class CallWatcher:
         while len(self._pending_deliveries) > _MAX_PENDING_DELIVERIES:
             evicted_call_id, _ = self._pending_deliveries.popitem(last=False)
             self._add_seen(evicted_call_id)
-            logger.warning("Evicted pending call notification %s due to state limit", evicted_call_id)
+            logger.warning(
+                "Evicted pending call notification %s due to state limit",
+                evicted_call_id,
+            )
 
     async def _handle_payload(self, payload: IncomingCallPayload) -> None:
         if payload.call_id in self._seen_ids:
