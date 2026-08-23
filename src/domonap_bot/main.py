@@ -6,6 +6,7 @@ from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.logging_config import setup_logging
 from domonap_bot.storage.sqlite import SqliteStorage
 from domonap_bot.storage.tokens import TokenStorage
+from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.bot import build_bot
 from domonap_bot.telegram.call_watcher import CallWatcher
 
@@ -39,9 +40,10 @@ async def main() -> None:
         "enabled" if settings.domonap_register_device_token else "disabled",
     )
 
-    bot, dp = await build_bot(settings, client, storage)
+    access = AccessControl(settings.allowed_telegram_user_ids)
+    bot, dp = await build_bot(settings, client, storage, access=access)
 
-    watcher = CallWatcher(client, bot, settings)
+    watcher = CallWatcher(client, bot, settings, access=access)
     await watcher.start()
 
     try:
