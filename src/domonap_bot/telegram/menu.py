@@ -2,32 +2,36 @@ import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
 from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.storage.base import Storage
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import main_menu_keyboard
+from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text, send_view
+from domonap_bot.telegram.ui.views import View, home_view
 
 logger = logging.getLogger(__name__)
 
 
-async def _render(
-    target: Message | CallbackQuery,
-    text: str,
-    kb: InlineKeyboardMarkup,
-) -> None:
-    if isinstance(target, CallbackQuery):
-        message = editable_callback_message(target)
-        if message is None:
-            await target.answer("Message unavailable", show_alert=True)
-            return
-        await message.edit_text(text, reply_markup=kb)
-        await target.answer()
-    else:
-        await target.answer(text, reply_markup=kb)
+async def _home_view(
+    client: DomonapClient,
+    admin_access: AccessControl,
+    user_id: int,
+) -> View:
+    doors_count: int | None
+    try:
+        doors_count = len(await client.get_doors())
+    except DomonapError:
+        doors_count = None
+
+    return home_view(
+        authorized=bool(client.access_token or client.refresh_token),
+        doors_count=doors_count,
+        is_admin=admin_access.is_allowed(user_id),
+    )
 
 
 def register_menu_handlers(
@@ -38,50 +42,30 @@ def register_menu_handlers(
     admin_access: AccessControl,
     cooldown: CooldownManager,
 ) -> None:
+    del storage, cooldown
+
     @router.message(Command("start"))
     @access.require_access
     async def cmd_start(message: Message) -> None:
-        has_token = client.access_token or client.refresh_token
-        doors_count = 0
-        try:
-            doors = await client.get_doors()
-            doors_count = len(doors)
-        except Exception:
-            pass
-
-        parts = [
-            "🏠 Domonap Bot",
-            "─────────────────────",
-            f"Status: {'✅ Authorized' if has_token else '❌ Not authorized'}",
-            f"Doors: {doors_count}",
-            "",
-        ]
-        text = "\n".join(parts)
-        is_admin = admin_access.is_allowed(message.from_user.id if message.from_user else 0)
-        await _render(message, text, main_menu_keyboard(is_admin))
+        user_id = message.from_user.id if message.from_user else 0
+        await send_view(message, await _home_view(client, admin_access, user_id))
 
     @router.callback_query(F.data == "m:main")
     @access.require_access
     async def callback_main_menu(callback: CallbackQuery) -> None:
-        has_token = client.access_token or client.refresh_token
-        doors_count = 0
-        try:
-            doors = await client.get_doors()
-            doors_count = len(doors)
-        except Exception:
-            pass
+        message = editable_callback_message(callback)
+        if message is None:
+            await acknowledge_callback(
+                callback,
+                "Сообщение недоступно",
+                show_alert=True,
+            )
+            return
 
-        parts = [
-            "🏠 Domonap Bot",
-            "─────────────────────",
-            f"Status: {'✅ Authorized' if has_token else '❌ Not authorized'}",
-            f"Doors: {doors_count}",
-            "",
-        ]
-        text = "\n".join(parts)
-        is_admin = admin_access.is_allowed(callback.from_user.id if callback.from_user else 0)
-        await _render(callback, text, main_menu_keyboard(is_admin))
+        await acknowledge_callback(callback)
+        user_id = callback.from_user.id if callback.from_user else 0
+        await edit_text(message, await _home_view(client, admin_access, user_id))
 
     @router.callback_query(F.data == "noop")
     async def callback_noop(callback: CallbackQuery) -> None:
-        await callback.answer()
+        await acknowledge_callback(callback)
