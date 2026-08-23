@@ -53,7 +53,10 @@ def register_call_handlers(
         except DomonapError:
             await edit_text(
                 message,
-                View("Не удалось загрузить журнал звонков.", back_keyboard("m:main", "← Главное меню")),
+                View(
+                    "Не удалось загрузить журнал звонков.",
+                    back_keyboard("m:main", "← Главное меню"),
+                ),
             )
             return
 
@@ -141,19 +144,27 @@ def register_call_handlers(
         except DomonapError:
             await edit_text(
                 message,
-                View("Не удалось загрузить звонок.", back_keyboard("c:p:0", "← Звонки")),
+                View(
+                    "Не удалось загрузить звонок.",
+                    back_keyboard("c:p:0", "← Звонки"),
+                ),
             )
             return
 
         if entry is None:
-            await edit_text(message, View("Звонок не найден.", back_keyboard("c:p:0", "← Звонки")))
+            await edit_text(
+                message,
+                View("Звонок не найден.", back_keyboard("c:p:0", "← Звонки")),
+            )
             return
 
         door_info_map: dict[str, tuple[str, str | None]] = {}
         try:
             doors = await client.get_doors()
             for door in doors:
-                url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+                url = safe_http_url(door.http_video_url) or safe_http_url(
+                    door.webrtc_video_url
+                )
                 door_info_map[door.door_id] = (door.name, url)
                 door_info_map[door.id] = (door.name, url)
         except DomonapError:
