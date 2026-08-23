@@ -4,16 +4,19 @@ from domonap_bot.telegram import cooldown as cooldown_module
 from domonap_bot.telegram.cooldown import CooldownManager
 
 
-def test_set_purges_expired_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_capacity_pressure_purges_expired_entries(monkeypatch: pytest.MonkeyPatch) -> None:
     now = 0.0
     monkeypatch.setattr(cooldown_module, "monotonic", lambda: now)
+    monkeypatch.setattr(cooldown_module, "_MAX_COOLDOWN_ENTRIES", 2)
     manager = CooldownManager(timeout=5.0)
-    manager.set(1, "old")
+    manager.set(1, "old-a")
+    manager.set(1, "old-b")
 
     now = 6.0
     manager.set(1, "new")
 
-    assert manager.is_ready(1, "old") is True
+    assert manager.is_ready(1, "old-a") is True
+    assert manager.is_ready(1, "old-b") is True
     assert list(manager._cooldowns) == [(1, "new")]
 
 
