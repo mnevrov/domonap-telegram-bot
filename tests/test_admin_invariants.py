@@ -36,7 +36,10 @@ def _admin_remove_handler(
 ) -> object:
     router = Router()
     register_admin_handlers(router, MagicMock(), storage, admin_access, access)
-    handlers = {handler.callback.__name__: handler.callback for handler in router.callback_query.handlers}
+    handlers = {
+        handler.callback.__name__: handler.callback
+        for handler in router.callback_query.handlers
+    }
     return handlers["callback_remove_user"]
 
 
@@ -52,7 +55,10 @@ async def test_configured_admin_must_also_be_allowed() -> None:
     bot, dp = await build_bot(settings, client)
     try:
         router = dp.sub_routers[0]
-        handlers = {handler.callback.__name__: handler.callback for handler in router.message.handlers}
+        handlers = {
+            handler.callback.__name__: handler.callback
+            for handler in router.message.handlers
+        }
         message = _message(2)
         message.text = "/auth"
 
@@ -76,7 +82,10 @@ async def test_configured_admin_is_active_when_allowed() -> None:
     bot, dp = await build_bot(settings, client)
     try:
         router = dp.sub_routers[0]
-        handlers = {handler.callback.__name__: handler.callback for handler in router.message.handlers}
+        handlers = {
+            handler.callback.__name__: handler.callback
+            for handler in router.message.handlers
+        }
         message = _message(1)
         message.text = "/auth"
 
