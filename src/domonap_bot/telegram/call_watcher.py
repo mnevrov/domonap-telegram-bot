@@ -281,15 +281,13 @@ class CallWatcher:
         address: str | None = None,
         call_time: datetime | None = None,
     ) -> str:
-        parts = ["📞 Входящий звонок"]
+        parts = ["🔔 Звонок в домофон"]
         if door:
-            parts.append(f"Дверь: {door.name}")
+            parts.append(f"🚪 {door.name}")
         elif address:
-            parts.append(f"Адрес: {address}")
-        if call_time:
-            parts.append(f"Время: {call_time.strftime('%H:%M:%S')}")
-        else:
-            parts.append(f"Время: {datetime.now().strftime('%H:%M:%S')}")
+            parts.append(f"📍 {address}")
+        timestamp = call_time or datetime.now()
+        parts.append(f"🕘 {timestamp.strftime('%H:%M')}")
         return "\n".join(parts)
 
     @staticmethod
@@ -299,18 +297,34 @@ class CallWatcher:
         call_id: str | None = None,
     ) -> InlineKeyboardMarkup | None:
         buttons: list[list[InlineKeyboardButton]] = []
-        if call_id:
-            buttons.append([
-                InlineKeyboardButton(text="📞 Ответить", callback_data=f"answer:{call_id}"),
-                InlineKeyboardButton(text="🔴 Сбросить", callback_data=f"reject:{call_id}"),
-            ])
         if door_id:
             buttons.append(
-                [InlineKeyboardButton(text="🔓 Открыть", callback_data=f"open:{door_id}")]
+                [
+                    InlineKeyboardButton(
+                        text="🔓 Открыть",
+                        callback_data=f"open:{door_id}",
+                        style="success",
+                    )
+                ]
+            )
+        if call_id:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="📞 Ответить",
+                        callback_data=f"answer:{call_id}",
+                        style="primary",
+                    ),
+                    InlineKeyboardButton(
+                        text="Сбросить",
+                        callback_data=f"reject:{call_id}",
+                        style="danger",
+                    ),
+                ]
             )
         safe_video_url = safe_http_url(video_url)
         if safe_video_url:
-            buttons.append([InlineKeyboardButton(text="📹 Видео", url=safe_video_url)])
+            buttons.append([InlineKeyboardButton(text="📹 Камера", url=safe_video_url)])
         if not buttons:
             return None
         return InlineKeyboardMarkup(inline_keyboard=buttons)
