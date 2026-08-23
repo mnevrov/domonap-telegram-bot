@@ -11,7 +11,7 @@ from domonap_bot.domonap.exceptions import (
     SessionExpiredError,
     TokenExpiredError,
 )
-from domonap_bot.domonap.models import AuthSession, DoorKey
+from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error as _describe_error
@@ -73,9 +73,10 @@ def register_handlers(
 
         try:
             username = await client.get_username()
+            phone = _mask_phone(client.phone) if client.phone else "not set"
             lines = [
                 "Authenticated: ✅",
-                f"Phone: {client.phone or 'not set'}",
+                f"Phone: {phone}",
             ]
             if username:
                 lines.append(f"Username: {username}")
@@ -201,41 +202,6 @@ def register_handlers(
         await client.token_storage.clear()
         client.mark_session_expired("user logout")
         await message.answer("✅ Tokens cleared. Logged out.")
-
-    @router.message(Command("import_tokens"))
-    @admin_access.require_access
-    async def cmd_import_tokens(message: Message) -> None:
-        parts = (message.text or "").split(maxsplit=2)
-        if len(parts) < 3:
-            await message.answer(
-                "Usage: /import_tokens <access_token> <refresh_token>\n\n"
-                "Example: /import_tokens eyJhbG... eyJjbG..."
-            )
-            return
-
-        access_token = parts[1].strip()
-        refresh_token = parts[2].strip()
-
-        if not access_token or not refresh_token:
-            await message.answer("Tokens cannot be empty.")
-            return
-
-        client.set_tokens(access_token, refresh_token, None)
-        session = AuthSession(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            phone=client.phone,
-            device_token=client.device_token,
-            instance_id=client.instance_id,
-        )
-        await client.token_storage.save(session)
-
-        try:
-            await message.delete()
-        except Exception:
-            pass
-
-        await message.answer("✅ Tokens imported successfully. Use /status to verify.")
 
     @router.callback_query(F.data.startswith("open:"))
     @access.require_access
