@@ -1,0 +1,22 @@
+# Never send local secrets or persistent application data to the Docker daemon/builder.
+.env
+.env.*
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# VCS / editor / local Python state are not part of the runtime image.
+.git/
+.github/
+.idea/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests and local documentation are not copied by the runtime Dockerfile.
+tests/
