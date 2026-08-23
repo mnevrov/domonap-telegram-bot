@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -20,12 +21,20 @@ from domonap_bot.telegram.url_policy import safe_http_url
 logger = logging.getLogger(__name__)
 
 _MAX_SEEN_IDS = 1000
+_MAX_PENDING_DELIVERIES = 1000
 _POLL_INTERVAL = 5.0
 _SIGNALR_RETRY_INTERVAL = 300.0
 _DOOR_MAP_TTL = 300.0
 _NOTIFICATION_MAX_ATTEMPTS = 3
+_NOTIFICATION_MAX_DELIVERY_ROUNDS = 3
 _NOTIFICATION_RETRY_BASE_DELAY = 0.5
 _NOTIFICATION_MAX_RETRY_AFTER = 5.0
+
+
+@dataclass
+class _PendingDelivery:
+    recipients: set[int]
+    completed_rounds: int
 
 
 class CallEventSource(Protocol):
@@ -51,6 +60,7 @@ class CallWatcher:
         self._task: asyncio.Task[Any] | None = None
         self._seen_ids: set[str] = set()
         self._seen_order: deque[str] = deque()
+        self._pending_deliveries: OrderedDict[str, _PendingDelivery] = OrderedDict()
         self._door_map: dict[str, DoorKey] = {}
         self._door_map_loaded_at = 0.0
         if event_source is None:
@@ -162,10 +172,51 @@ class CallWatcher:
             return self._access.user_ids()
         return list(dict.fromkeys(self._settings.allowed_telegram_user_ids))
 
+    def _delivery_recipient_ids(self, call_id: str) -> list[int]:
+        current_recipients = self._recipient_ids()
+        pending = self._pending_deliveries.get(call_id)
+        if pending is None:
+            return current_recipients
+        return [uid for uid in current_recipients if uid in pending.recipients]
+
+    def _record_delivery_result(self, call_id: str, failed_user_ids: set[int]) -> None:
+        existing = self._pending_deliveries.get(call_id)
+        completed_rounds = 1 if existing is None else existing.completed_rounds + 1
+
+        if not failed_user_ids:
+            self._pending_deliveries.pop(call_id, None)
+            self._add_seen(call_id)
+            return
+
+        if completed_rounds >= _NOTIFICATION_MAX_DELIVERY_ROUNDS:
+            self._pending_deliveries.pop(call_id, None)
+            self._add_seen(call_id)
+            logger.warning(
+                "Giving up call notification %s for %s recipient(s) after %s delivery rounds",
+                call_id,
+                len(failed_user_ids),
+                completed_rounds,
+            )
+            return
+
+        self._pending_deliveries[call_id] = _PendingDelivery(
+            recipients=set(failed_user_ids),
+            completed_rounds=completed_rounds,
+        )
+        self._pending_deliveries.move_to_end(call_id)
+        while len(self._pending_deliveries) > _MAX_PENDING_DELIVERIES:
+            evicted_call_id, _ = self._pending_deliveries.popitem(last=False)
+            self._add_seen(evicted_call_id)
+            logger.warning("Evicted pending call notification %s due to state limit", evicted_call_id)
+
     async def _handle_payload(self, payload: IncomingCallPayload) -> None:
         if payload.call_id in self._seen_ids:
             return
-        self._add_seen(payload.call_id)
+
+        user_ids = self._delivery_recipient_ids(payload.call_id)
+        if not user_ids:
+            self._record_delivery_result(payload.call_id, set())
+            return
 
         door = await self._resolve_door(payload.door_id)
 
@@ -173,8 +224,8 @@ class CallWatcher:
         if not video_url and door:
             video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
 
-        await self._send_notification(
-            user_ids=self._recipient_ids(),
+        failed_user_ids = await self._send_notification(
+            user_ids=user_ids,
             text=self._build_message_text(
                 door=door,
                 address=payload.address or payload.title,
@@ -184,11 +235,16 @@ class CallWatcher:
             video_url=video_url,
             call_id=payload.call_id,
         )
+        self._record_delivery_result(payload.call_id, failed_user_ids)
 
     async def _handle_entry(self, entry: CallLogEntry) -> None:
         if entry.call_id in self._seen_ids:
             return
-        self._add_seen(entry.call_id)
+
+        user_ids = self._delivery_recipient_ids(entry.call_id)
+        if not user_ids:
+            self._record_delivery_result(entry.call_id, set())
+            return
 
         door = await self._resolve_door(entry.door_id)
         video_url = (
@@ -197,14 +253,15 @@ class CallWatcher:
             else None
         )
 
-        await self._send_notification(
-            user_ids=self._recipient_ids(),
+        failed_user_ids = await self._send_notification(
+            user_ids=user_ids,
             text=self._build_message_text(door=door, call_time=entry.call_time),
             photo_url=safe_http_url(entry.photo_url),
             door_id=entry.door_id or (door.door_id if door else None),
             video_url=video_url,
             call_id=entry.call_id,
         )
+        self._record_delivery_result(entry.call_id, failed_user_ids)
 
     def _add_seen(self, call_id: str) -> None:
         if call_id in self._seen_ids:
@@ -311,9 +368,10 @@ class CallWatcher:
         door_id: str | None = None,
         video_url: str | None = None,
         call_id: str | None = None,
-    ) -> None:
+    ) -> set[int]:
         kb = self._build_keyboard(door_id=door_id, video_url=video_url, call_id=call_id)
         safe_photo_url = safe_http_url(photo_url)
+        failed_user_ids: set[int] = set()
 
         for uid in user_ids:
             if safe_photo_url:
@@ -344,11 +402,18 @@ class CallWatcher:
                     reply_markup=kb,
                 )
 
-            await self._send_with_retry(
+            text_sent = await self._send_with_retry(
                 send_text,
                 user_id=uid,
                 kind="text",
             )
+            if not text_sent:
+                failed_user_ids.add(uid)
+
+        return failed_user_ids
 
     def get_seen_ids_count(self) -> int:
         return len(self._seen_ids)
+
+    def get_pending_delivery_count(self) -> int:
+        return len(self._pending_deliveries)
