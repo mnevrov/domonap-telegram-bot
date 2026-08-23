@@ -1,9 +1,8 @@
-from unittest.mock import AsyncMock, MagicMock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock
 
 from aiogram import Router
 from aiogram.types import CallbackQuery, Message, User
 
-from domonap_bot.storage.sqlite import SqliteStorage
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.menu import register_menu_handlers

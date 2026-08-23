@@ -20,7 +20,10 @@ def extract_api_error_text(exc: ApiError) -> str | None:
         data = json.loads(match.group(0))
     except json.JSONDecodeError:
         return None
-    return data.get("errorText")
+    if not isinstance(data, dict):
+        return None
+    api_text = data.get("errorText")
+    return api_text if isinstance(api_text, str) else None
 
 
 def describe_error(exc: DomonapError) -> str:
