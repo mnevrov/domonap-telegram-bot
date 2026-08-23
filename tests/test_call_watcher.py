@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -7,6 +8,21 @@ import pytest
 from domonap_bot.config import Settings
 from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
 from domonap_bot.telegram.call_watcher import _MAX_SEEN_IDS, CallWatcher
+
+
+class FailingEventSource:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error or RuntimeError("signalr down")
+        self.attempts = 0
+        self.closed = False
+
+    async def listen_once(self) -> AsyncIterator[IncomingCallPayload]:
+        self.attempts += 1
+        raise self.error
+        yield IncomingCallPayload(CallId="unreachable")
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 @pytest.fixture
@@ -22,8 +38,9 @@ def settings() -> Settings:
 @pytest.fixture
 def client() -> MagicMock:
     c = MagicMock()
-    c.listen_events = AsyncMock(side_effect=NotImplementedError("not available"))
     c.get_call_logs = AsyncMock(return_value=[])
+    c.get_doors = AsyncMock(return_value=[])
+    c.refresh_session = AsyncMock(return_value=True)
     return c
 
 
@@ -235,21 +252,20 @@ class TestSignalRRetry:
     ) -> None:
         import domonap_bot.telegram.call_watcher as call_watcher_module
 
-        # Use small but nonzero intervals: a real asyncio.sleep() call is needed
-        # so the event loop actually yields to this test's watchdog coroutine.
         monkeypatch.setattr(call_watcher_module, "_SIGNALR_RETRY_INTERVAL", 0.01)
         monkeypatch.setattr(call_watcher_module, "_POLL_INTERVAL", 0.01)
 
         client = MagicMock()
-        client.listen_events = AsyncMock(side_effect=RuntimeError("signalr down"))
         client.get_call_logs = AsyncMock(return_value=[])
         client.get_doors = AsyncMock(return_value=[])
+        client.refresh_session = AsyncMock(return_value=True)
+        source = FailingEventSource()
 
-        watcher = CallWatcher(client, bot, settings)
+        watcher = CallWatcher(client, bot, settings, event_source=source)
         run_task = asyncio.create_task(watcher._run())
 
         async def wait_for_second_attempt() -> None:
-            while client.listen_events.call_count < 2:
+            while source.attempts < 2:
                 await asyncio.sleep(0)
 
         try:
@@ -260,54 +276,28 @@ class TestSignalRRetry:
                 await run_task
             except asyncio.CancelledError:
                 pass
+            await source.close()
 
-        assert client.listen_events.call_count >= 2
+        assert source.attempts >= 2
 
     async def test_stop_does_not_hang_while_polling(
         self, monkeypatch: pytest.MonkeyPatch, bot: MagicMock, settings: Settings
     ) -> None:
-        """Regression test: cancellation during _poll_loop's sleep must propagate,
-        not be swallowed, otherwise CallWatcher.stop() hangs forever on shutdown."""
+        """Cancellation during polling must propagate and close the event source."""
         import domonap_bot.telegram.call_watcher as call_watcher_module
 
         monkeypatch.setattr(call_watcher_module, "_POLL_INTERVAL", 10.0)
 
         client = MagicMock()
-        client.listen_events = AsyncMock(side_effect=NotImplementedError("n/a"))
         client.get_call_logs = AsyncMock(return_value=[])
         client.get_doors = AsyncMock(return_value=[])
+        client.refresh_session = AsyncMock(return_value=True)
+        source = FailingEventSource(NotImplementedError("n/a"))
 
-        watcher = CallWatcher(client, bot, settings)
+        watcher = CallWatcher(client, bot, settings, event_source=source)
         watcher._task = asyncio.create_task(watcher._run())
 
-        # Give _run a chance to reach the poll loop's sleep before stopping.
         await asyncio.sleep(0.05)
-
         await asyncio.wait_for(watcher.stop(), timeout=2.0)
 
-
-class TestSignalRRecordParsing:
-    def test_parse_valid_records(self) -> None:
-        from domonap_bot.domonap.client import DomonapClient
-
-        text = (
-            '{"type":1,"target":"IncomingCall","arguments":[{"CallId":"c1"}]}\n'
-            '{"type":1,"target":"IncomingCall","arguments":[{"CallId":"c2"}]}\n'
-        )
-        records = DomonapClient._parse_signalr_records(text)
-        assert len(records) == 2
-        assert records[0]["target"] == "IncomingCall"
-        assert records[1]["arguments"][0]["CallId"] == "c2"
-
-    def test_parse_empty_text(self) -> None:
-        from domonap_bot.domonap.client import DomonapClient
-
-        assert DomonapClient._parse_signalr_records("") == []
-        assert DomonapClient._parse_signalr_records("   ") == []
-
-    def test_parse_skips_invalid_json(self) -> None:
-        from domonap_bot.domonap.client import DomonapClient
-
-        text = '{"valid": true}\nnot json\n{"also": "valid"}\n'
-        records = DomonapClient._parse_signalr_records(text)
-        assert len(records) == 2
+        assert source.closed is True
