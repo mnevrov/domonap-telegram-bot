@@ -22,6 +22,8 @@ _SIGNALR_PING = '{"type":6}' + _SIGNALR_RECORD_SEPARATOR
 _DEFAULT_KEEPALIVE_INTERVAL = 15.0
 _DEFAULT_SERVER_TIMEOUT = 30.0
 _DEFAULT_MAX_RECONNECT_DELAY = 10.0
+_MAX_WEBSOCKET_MESSAGE_SIZE = 256 * 1024
+_MAX_ACTIVE_CALLS = 1024
 
 TokenProvider = Callable[[], str | None]
 RefreshCallback = Callable[[], Awaitable[bool]]
@@ -131,6 +133,7 @@ class DomonapSignalRTransport:
                 ws_url,
                 headers=headers,
                 timeout=ws_timeout,
+                max_msg_size=_MAX_WEBSOCKET_MESSAGE_SIZE,
             ) as ws:
                 self._ws = ws
                 self._reconnect_delay = 1.0
@@ -231,13 +234,19 @@ class DomonapSignalRTransport:
         except (aiohttp.ClientError, ConnectionError):
             return
 
+    def _remember_active_call(self, call_id: str, door_id: str) -> None:
+        if call_id not in self._active_calls and len(self._active_calls) >= _MAX_ACTIVE_CALLS:
+            oldest_call_id = next(iter(self._active_calls))
+            self._active_calls.pop(oldest_call_id, None)
+        self._active_calls[call_id] = door_id
+
     def _handle_record(self, record: str) -> IncomingCallPayload | None:
         if record == "{}":
             return None
         try:
             data = json.loads(record)
         except json.JSONDecodeError:
-            logger.debug("Ignoring non-JSON SignalR record: %s", record[:200])
+            logger.debug("Ignoring malformed SignalR JSON record")
             return None
         if not isinstance(data, dict):
             return None
@@ -259,7 +268,7 @@ class DomonapSignalRTransport:
                 if door_id is None:
                     door_id = self._active_calls.get(call_id)
                 self._active_calls.pop(call_id, None)
-            logger.debug("Domonap call ended: call_id=%s door_id=%s", call_id, door_id)
+            logger.debug("Domonap call ended")
             return None
 
         if event_message != "DomofonCalling":
@@ -268,9 +277,9 @@ class DomonapSignalRTransport:
         try:
             payload = IncomingCallPayload.model_validate(push_data)
         except ValidationError:
-            logger.warning("Invalid Domonap incoming-call push: %s", push_data)
+            logger.warning("Invalid Domonap incoming-call push schema")
             return None
         payload.raw = dict(push_data)
         if payload.call_id and payload.door_id:
-            self._active_calls[payload.call_id] = payload.door_id
+            self._remember_active_call(payload.call_id, payload.door_id)
         return payload
