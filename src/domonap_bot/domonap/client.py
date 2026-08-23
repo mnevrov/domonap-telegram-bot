@@ -1,7 +1,5 @@
 import asyncio
-import json
 import logging
-from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from secrets import token_bytes
 from typing import Any, Callable
@@ -22,7 +20,6 @@ from domonap_bot.domonap.models import (
     CallLogEntry,
     CallLogPage,
     DoorKey,
-    IncomingCallPayload,
     PagedResponse,
     TokenData,
 )
@@ -131,10 +128,8 @@ class DomonapClient:
             headers=headers,
         )
         self.auth = DomonapAuth(self._http)
-        self._closed = False
 
     async def close(self) -> None:
-        self._closed = True
         await self._http.aclose()
 
     async def __aenter__(self) -> "DomonapClient":
@@ -686,96 +681,6 @@ class DomonapClient:
             expect_text=True,
         )
         return isinstance(data, str)
-
-    # --- Notification hub ---
-
-    async def get_notify_token(self) -> str | None:
-        data = await self._request(
-            "POST",
-            "/notificationHub/negotiate?negotiateVersion=1",
-            need_auth=True,
-        )
-        if isinstance(data, str):
-            return None
-        return data.get("connectionToken")
-
-    # --- SignalR event listening ---
-
-    async def listen_events(self) -> AsyncIterator[IncomingCallPayload]:
-        async for payload in self._signalr_listen():
-            yield payload
-
-    async def _signalr_listen(self) -> AsyncIterator[IncomingCallPayload]:
-        attempt = 0
-        while not self._closed:
-            negotiate_data = await self._request(
-                "POST",
-                "/notificationHub/negotiate?negotiateVersion=1",
-                need_auth=True,
-            )
-            if isinstance(negotiate_data, str):
-                raise ApiError("Unexpected negotiate response")
-
-            connection_id: str | None = negotiate_data.get("connectionId") or negotiate_data.get(
-                "connectionToken"
-            )
-            if not connection_id:
-                raise ApiError("No connection ID in negotiate response")
-
-            logger.info("SignalR connected: id=%s", connection_id)
-
-            while not self._closed:
-                try:
-                    url = f"{BASE_URL}/notificationHub?id={connection_id}"
-                    headers: dict[str, str] = {}
-                    if self.access_token:
-                        headers["Authorization"] = f"Bearer {self.access_token}"
-
-                    response = await self._http.get(
-                        url, headers=headers, timeout=httpx.Timeout(120.0)
-                    )
-
-                    if response.status_code == 204:
-                        continue
-
-                    text = response.text
-                    if not text.strip():
-                        continue
-
-                    for record in self._parse_signalr_records(text):
-                        if record.get("type") == 1 and record.get("target") == "IncomingCall":
-                            args = record.get("arguments", [])
-                            if args:
-                                attempt = 0
-                                yield IncomingCallPayload(**args[0])
-
-                except httpx.TimeoutException:
-                    continue
-                except httpx.HTTPError as exc:
-                    attempt += 1
-                    backoff = min(60.0, 5.0 * (2**attempt))
-                    logger.warning(
-                        "SignalR poll error (attempt %d): %s; reconnecting in %.0fs",
-                        attempt,
-                        exc,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    break
-
-    @staticmethod
-    def _parse_signalr_records(text: str) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                records.append(record)
-            except json.JSONDecodeError:
-                continue
-        return records
 
     # --- Fetch external resource (for media) ---
 
