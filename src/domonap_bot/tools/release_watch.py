@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -71,10 +71,14 @@ def _request_with_version_fallback(
         except ReleaseWatchError as exc:
             errors.append(str(exc))
             continue
-        if str(payload.get("code", "")).upper() == "OK" and payload.get("body") is not None:
+        code_ok = str(payload.get("code", "")).upper() == "OK"
+        if code_ok and payload.get("body") is not None:
             return payload, version_code
-        errors.append(f"ruStoreVerCode={version_code}: code={payload.get('code')!r}")
-    raise ReleaseWatchError("RuStore API rejected all client versions: " + "; ".join(errors))
+        errors.append(
+            f"ruStoreVerCode={version_code}: code={payload.get('code')!r}"
+        )
+    detail = "; ".join(errors)
+    raise ReleaseWatchError(f"RuStore API rejected all client versions: {detail}")
 
 
 def fetch_release_metadata() -> dict[str, Any]:
@@ -117,26 +121,60 @@ def fetch_apk_url(app_id: int) -> str:
 
 
 def download_apk(url: str, destination: Path) -> None:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "domonap-telegram-bot-api-watch/1.0"},
-    )
+    """Download the APK with system curl while preserving full TLS verification."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ReleaseWatchError("Refusing to download APK from a non-HTTPS URL")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.tmp")
-    total = 0
+    temporary.unlink(missing_ok=True)
+    command = [
+        "curl",
+        "--fail",
+        "--location",
+        "--silent",
+        "--show-error",
+        "--retry",
+        "3",
+        "--retry-all-errors",
+        "--connect-timeout",
+        "20",
+        "--max-time",
+        "240",
+        "--max-filesize",
+        str(_MAX_APK_BYTES),
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--tlsv1.2",
+        "--output",
+        str(temporary),
+        url,
+    ]
     try:
-        with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as output:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > _MAX_APK_BYTES:
-                    raise ReleaseWatchError("APK exceeds the configured size limit")
-                output.write(chunk)
-        if total == 0:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip()[-500:]
+            raise ReleaseWatchError(
+                f"Verified APK download failed with curl {result.returncode}: {detail}"
+            )
+        size = temporary.stat().st_size
+        if size <= 0:
             raise ReleaseWatchError("Downloaded APK is empty")
-        shutil.move(str(temporary), str(destination))
+        if size > _MAX_APK_BYTES:
+            raise ReleaseWatchError("APK exceeds the configured size limit")
+        temporary.replace(destination)
+    except (OSError, subprocess.TimeoutExpired):
+        temporary.unlink(missing_ok=True)
+        raise
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -176,7 +214,9 @@ def build_report(metadata: dict[str, Any], baseline: dict[str, Any]) -> dict[str
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check the current Domonap Android release")
+    parser = argparse.ArgumentParser(
+        description="Check the current Domonap Android release"
+    )
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--download-apk", type=Path)
