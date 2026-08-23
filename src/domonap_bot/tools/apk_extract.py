@@ -10,6 +10,7 @@ _TEXT_SUFFIXES = {
     ".java",
     ".kt",
     ".kts",
+    ".py",
     ".xml",
     ".json",
     ".properties",
@@ -93,7 +94,8 @@ def extract_contract(root: Path) -> dict[str, Any]:
             if endpoint.startswith(("/sso-api/", "/client-api/", "/communication-api/")):
                 endpoints.add(f"{method} {endpoint}")
 
-        # Some decompilers lose Retrofit annotations while preserving literal paths.
+        # Decompiled code and third-party clients can preserve paths without Retrofit
+        # annotations. Keep those paths with an UNKNOWN method rather than losing them.
         for match in _ENDPOINT_RE.finditer(text):
             endpoint = match.group(1)
             if not any(item.endswith(f" {endpoint}") for item in endpoints):
@@ -106,7 +108,7 @@ def extract_contract(root: Path) -> dict[str, Any]:
         "schema_version": 1,
         "extraction": {
             "files_scanned": files_scanned,
-            "source": "jadx-output",
+            "source": "static-text-scan",
         },
         "app": {
             "version_codes": sorted(version_codes),
@@ -124,7 +126,9 @@ def extract_contract(root: Path) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Extract Domonap protocol markers from JADX output")
+    parser = argparse.ArgumentParser(
+        description="Extract Domonap protocol markers from decompiled/client sources"
+    )
     parser.add_argument("--jadx-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -133,7 +137,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if not args.jadx_dir.is_dir():
-        raise SystemExit(f"JADX directory does not exist: {args.jadx_dir}")
+        raise SystemExit(f"Source directory does not exist: {args.jadx_dir}")
     contract = extract_contract(args.jadx_dir)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
