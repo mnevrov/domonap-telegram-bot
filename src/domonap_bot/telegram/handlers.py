@@ -13,9 +13,17 @@ from domonap_bot.domonap.exceptions import (
 )
 from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error as _describe_error
-from domonap_bot.telegram.keyboards import back_keyboard, door_selection_keyboard
+from domonap_bot.telegram.keyboards import door_selection_keyboard
+from domonap_bot.telegram.ui.action_state import (
+    append_status,
+    mark_call_finished,
+    mark_door_opened,
+)
+from domonap_bot.telegram.ui.renderer import edit_view
+from domonap_bot.telegram.ui.views import View
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +45,41 @@ def register_handlers(
     admin_access: AccessControl,
     cooldown: CooldownManager,
 ) -> None:
-
     async def _respond_error(
         target: Message | CallbackQuery,
         exc: DomonapError,
     ) -> None:
         msg = _describe_error(exc)
         if isinstance(target, CallbackQuery):
-            if target.message and hasattr(target.message, "edit_text"):
-                await target.message.edit_text(msg)
+            message = editable_callback_message(target)
+            if message is not None:
+                await edit_view(
+                    message,
+                    View(append_status(message, f"❌ {msg}"), message.reply_markup),
+                )
             else:
                 await target.answer(msg, show_alert=True)
         else:
             await target.answer(msg)
+
+    async def _render_action_status(
+        callback: CallbackQuery,
+        status: str,
+        *,
+        keyboard=None,
+    ) -> bool:
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer(status, show_alert=True)
+            return False
+        await edit_view(
+            message,
+            View(
+                append_status(message, status),
+                message.reply_markup if keyboard is None else keyboard,
+            ),
+        )
+        return True
 
     @router.message(Command("status"))
     @access.require_access
@@ -110,9 +140,7 @@ def register_handlers(
             await message.answer("No doors available.")
             return
 
-        text = "Available doors:\n" + "\n".join(
-            f"🚪 {d.name}" for d in doors
-        )
+        text = "Available doors:\n" + "\n".join(f"🚪 {door.name}" for door in doors)
         kb = door_selection_keyboard(doors)
         await message.answer(text, reply_markup=kb)
 
@@ -161,8 +189,7 @@ def register_handlers(
         if success:
             masked = _mask_phone(phone)
             await message.answer(
-                f"SMS code sent to {masked}\n"
-                f"Use /code <code> to complete authorization."
+                f"SMS code sent to {masked}\nUse /code <code> to complete authorization."
             )
         else:
             await message.answer("Failed to request SMS code. Check phone number.")
@@ -207,7 +234,7 @@ def register_handlers(
     @access.require_access
     async def callback_open_door(callback: CallbackQuery) -> None:
         if not callback.data:
-            await callback.answer("Invalid callback data", show_alert=True)
+            await callback.answer("Некорректные данные", show_alert=True)
             return
         user_id = callback.from_user.id if callback.from_user else 0
         door_id = callback.data.removeprefix("open:")
@@ -215,37 +242,30 @@ def register_handlers(
         if not cooldown.is_ready(user_id, door_id):
             remaining = cooldown.remaining(user_id, door_id)
             await callback.answer(
-                f"Please wait {remaining:.0f}s before retrying",
+                f"Повторите через {remaining:.0f} с",
                 show_alert=True,
             )
             return
 
-        await callback.answer("Opening door...")
+        await callback.answer("Открываю…")
         cooldown.set(user_id, door_id)
 
         try:
             success = await client.open_door(door_id)
         except DomonapError as exc:
-            if callback.message and hasattr(callback.message, "edit_text"):
-                await callback.message.edit_text(
-                    _describe_error(exc), reply_markup=back_keyboard("m:main")
-                )
-            else:
-                await callback.answer(_describe_error(exc), show_alert=True)
+            await _respond_error(callback, exc)
             return
 
-        text = "✅ Door opened successfully!" if success else "❌ Failed to open door."
-
-        if callback.message and hasattr(callback.message, "edit_text"):
-            await callback.message.edit_text(text, reply_markup=back_keyboard("m:main"))
-        else:
-            await callback.answer(text, show_alert=True)
+        message = editable_callback_message(callback)
+        keyboard = mark_door_opened(message.reply_markup) if message is not None else None
+        status = "✅ Дверь открыта." if success else "❌ Не удалось открыть дверь."
+        await _render_action_status(callback, status, keyboard=keyboard)
 
     @router.callback_query(F.data.startswith("answer:"))
     @access.require_access
     async def callback_answer_call(callback: CallbackQuery) -> None:
         if not callback.data:
-            await callback.answer("Invalid callback data", show_alert=True)
+            await callback.answer("Некорректные данные", show_alert=True)
             return
         user_id = callback.from_user.id if callback.from_user else 0
         call_id = callback.data.removeprefix("answer:")
@@ -254,12 +274,12 @@ def register_handlers(
         if not cooldown.is_ready(user_id, cooldown_key):
             remaining = cooldown.remaining(user_id, cooldown_key)
             await callback.answer(
-                f"Please wait {remaining:.0f}s before retrying",
+                f"Повторите через {remaining:.0f} с",
                 show_alert=True,
             )
             return
 
-        await callback.answer("Answering call...")
+        await callback.answer("Отвечаю…")
         cooldown.set(user_id, cooldown_key)
 
         try:
@@ -268,17 +288,24 @@ def register_handlers(
             await _respond_error(callback, exc)
             return
 
-        text = "📞 Call answered." if success else "❌ Failed to answer call."
-        if callback.message and hasattr(callback.message, "edit_text"):
-            await callback.message.edit_text(text, reply_markup=back_keyboard("m:main"))
-        else:
-            await callback.answer(text, show_alert=True)
+        message = editable_callback_message(callback)
+        keyboard = (
+            mark_call_finished(
+                message.reply_markup,
+                text="✅ Звонок принят",
+                style="success",
+            )
+            if message is not None
+            else None
+        )
+        status = "✅ Звонок принят." if success else "❌ Не удалось ответить на звонок."
+        await _render_action_status(callback, status, keyboard=keyboard)
 
     @router.callback_query(F.data.startswith("reject:"))
     @access.require_access
     async def callback_end_call(callback: CallbackQuery) -> None:
         if not callback.data:
-            await callback.answer("Invalid callback data", show_alert=True)
+            await callback.answer("Некорректные данные", show_alert=True)
             return
         user_id = callback.from_user.id if callback.from_user else 0
         call_id = callback.data.removeprefix("reject:")
@@ -287,12 +314,12 @@ def register_handlers(
         if not cooldown.is_ready(user_id, cooldown_key):
             remaining = cooldown.remaining(user_id, cooldown_key)
             await callback.answer(
-                f"Please wait {remaining:.0f}s before retrying",
+                f"Повторите через {remaining:.0f} с",
                 show_alert=True,
             )
             return
 
-        await callback.answer("Ending call...")
+        await callback.answer("Завершаю звонок…")
         cooldown.set(user_id, cooldown_key)
 
         try:
@@ -301,11 +328,18 @@ def register_handlers(
             await _respond_error(callback, exc)
             return
 
-        text = "🔴 Call ended." if success else "❌ Failed to end call."
-        if callback.message and hasattr(callback.message, "edit_text"):
-            await callback.message.edit_text(text, reply_markup=back_keyboard("m:main"))
-        else:
-            await callback.answer(text, show_alert=True)
+        message = editable_callback_message(callback)
+        keyboard = (
+            mark_call_finished(
+                message.reply_markup,
+                text="🔴 Звонок завершён",
+                style="danger",
+            )
+            if message is not None
+            else None
+        )
+        status = "🔴 Звонок завершён." if success else "❌ Не удалось завершить звонок."
+        await _render_action_status(callback, status, keyboard=keyboard)
 
 
 async def _auto_open_door(
