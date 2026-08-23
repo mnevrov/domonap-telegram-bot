@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     domonap_phone: str = ""
     domonap_register_device_token: bool = False
     storage_path: str = "data/storage.db"
+    storage_encryption_key: SecretStr | None = None
     log_level: str = "INFO"
     call_watcher_enabled: bool = True
 
