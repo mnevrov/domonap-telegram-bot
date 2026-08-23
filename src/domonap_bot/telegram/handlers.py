@@ -2,6 +2,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from domonap_bot.domonap.client import DomonapClient
@@ -13,6 +14,12 @@ from domonap_bot.domonap.exceptions import (
 )
 from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.auth_flow import (
+    AuthStates,
+    mask_phone as _mask_phone,
+    request_sms_code,
+    submit_sms_code,
+)
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error as _describe_error
@@ -26,16 +33,6 @@ from domonap_bot.telegram.ui.renderer import edit_view
 from domonap_bot.telegram.ui.views import View
 
 logger = logging.getLogger(__name__)
-
-
-def _mask_phone(phone: str) -> str:
-    digits = "".join(c for c in phone if c.isdigit())
-    if len(digits) < 4:
-        return phone
-    masked = digits[:3] + "***" + digits[-2:]
-    if phone.startswith("+"):
-        return f"+{masked}"
-    return masked
 
 
 def register_handlers(
@@ -81,14 +78,39 @@ def register_handlers(
         )
         return True
 
+    @router.message(Command("help"))
+    @access.require_access
+    async def cmd_help(message: Message) -> None:
+        user_id = message.from_user.id if message.from_user else 0
+        lines = [
+            "ℹ️ Помощь",
+            "",
+            "/start — главное меню",
+            "/open — быстро открыть дверь",
+            "/doors — список дверей",
+            "/status — проверить подключение Domonap",
+            "/help — эта справка",
+        ]
+        if admin_access.is_allowed(user_id):
+            lines.extend(
+                [
+                    "",
+                    "Для администратора:",
+                    "/auth — подключить Domonap по SMS",
+                    "/logout — завершить сессию Domonap",
+                    "Управление пользователями доступно из главного меню.",
+                ]
+            )
+        await message.answer("\n".join(lines))
+
     @router.message(Command("status"))
     @access.require_access
     async def cmd_status(message: Message) -> None:
         has_token = client.access_token or client.refresh_token
         if not has_token:
             await message.answer(
-                "Authenticated: ❌\n"
-                "No tokens stored. Authentication required."
+                "Domonap: ❌ не подключён\n"
+                "Авторизация требуется. Администратор может использовать /auth."
             )
             return
 
@@ -96,35 +118,35 @@ def register_handlers(
             refreshed = await client.refresh_session()
             if not refreshed:
                 await message.answer(
-                    "Authenticated: ❌\n"
-                    "Token refresh failed. Re-authentication required."
+                    "Domonap: ❌ сессия истекла\n"
+                    "Подключите Domonap заново через /auth."
                 )
                 return
 
         try:
             username = await client.get_username()
-            phone = _mask_phone(client.phone) if client.phone else "not set"
+            phone = _mask_phone(client.phone) if client.phone else "не указан"
             lines = [
-                "Authenticated: ✅",
-                f"Phone: {phone}",
+                "Domonap: ✅ подключён",
+                f"Телефон: {phone}",
             ]
             if username:
-                lines.append(f"Username: {username}")
+                lines.append(f"Пользователь: {username}")
             await message.answer("\n".join(lines))
         except (TokenExpiredError, SessionExpiredError):
             await message.answer(
-                "Authenticated: ❌\n"
-                "Session expired. Re-authentication required."
+                "Domonap: ❌ сессия истекла\n"
+                "Подключите Domonap заново через /auth."
             )
         except NetworkError:
             await message.answer(
-                "Authenticated: ❓\n"
-                "Network unavailable. Cannot verify status."
+                "Domonap: ❓ не удалось проверить\n"
+                "Сеть недоступна. Повторите позже."
             )
         except DomonapError:
             await message.answer(
-                "Authenticated: ❓\n"
-                "API error. Cannot verify status."
+                "Domonap: ❓ не удалось проверить\n"
+                "Ошибка Domonap API. Повторите позже."
             )
 
     @router.message(Command("doors"))
@@ -137,12 +159,13 @@ def register_handlers(
             return
 
         if not doors:
-            await message.answer("No doors available.")
+            await message.answer("Доступных дверей нет.")
             return
 
-        text = "Available doors:\n" + "\n".join(f"🚪 {door.name}" for door in doors)
-        kb = door_selection_keyboard(doors)
-        await message.answer(text, reply_markup=kb)
+        await message.answer(
+            "🚪 Двери\n\nВыберите дверь:",
+            reply_markup=door_selection_keyboard(doors),
+        )
 
     @router.message(Command("open"))
     @access.require_access
@@ -154,7 +177,9 @@ def register_handlers(
             return
 
         if not doors:
-            await message.answer("No doors available. Add a key in the Domonap app first.")
+            await message.answer(
+                "Доступных дверей нет. Добавьте ключ в приложении Domonap."
+            )
             return
 
         if len(doors) == 1:
@@ -164,71 +189,42 @@ def register_handlers(
             return
 
         await message.answer(
-            "Select a door to open:",
+            "🔓 Какую дверь открыть?",
             reply_markup=door_selection_keyboard(doors),
         )
 
     @router.message(Command("auth"))
     @admin_access.require_access
-    async def cmd_auth(message: Message) -> None:
-        phone = client.phone
-        if not phone:
-            await message.answer("No phone number configured. Set DOMONAP_PHONE in .env")
-            return
-
-        try:
-            success = await client.login(phone)
-        except NetworkError:
-            await message.answer("Network unavailable. Please try again later.")
-            return
-        except DomonapError as exc:
-            logger.warning("SMS request failed for phone %s: %s", _mask_phone(phone), exc)
-            await message.answer(_describe_error(exc))
-            return
-
-        if success:
-            masked = _mask_phone(phone)
-            await message.answer(
-                f"SMS code sent to {masked}\nUse /code <code> to complete authorization."
-            )
-        else:
-            await message.answer("Failed to request SMS code. Check phone number.")
+    async def cmd_auth(message: Message, state: FSMContext) -> None:
+        await request_sms_code(message, client, state)
 
     @router.message(Command("code"))
     @admin_access.require_access
-    async def cmd_code(message: Message) -> None:
+    async def cmd_code(message: Message, state: FSMContext) -> None:
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) < 2 or not parts[1].strip():
-            await message.answer("Usage: /code <sms_code>")
+            await message.answer("Использование: /code <код из SMS>")
             return
+        await submit_sms_code(message, client, state, parts[1])
 
-        code = parts[1].strip()
+    @router.message(AuthStates.waiting_sms_code, Command("cancel"))
+    @admin_access.require_access
+    async def cancel_sms_code(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Авторизация отменена.")
 
-        try:
-            success = await client.confirm_login(code)
-        except NetworkError:
-            await message.answer("Network unavailable. Please try again later.")
-            return
-        except DomonapError:
-            await message.answer("Authorization failed. Check the code and try again.")
-            return
-        finally:
-            try:
-                await message.delete()
-            except Exception:
-                pass
-
-        if success:
-            await message.answer("✅ Successfully authorized with Domonap!")
-        else:
-            await message.answer("❌ Invalid code or session expired. Run /auth again.")
+    @router.message(AuthStates.waiting_sms_code, F.text)
+    @admin_access.require_access
+    async def receive_sms_code(message: Message, state: FSMContext) -> None:
+        await submit_sms_code(message, client, state, message.text or "")
 
     @router.message(Command("logout"))
     @admin_access.require_access
-    async def cmd_logout(message: Message) -> None:
+    async def cmd_logout(message: Message, state: FSMContext) -> None:
+        await state.clear()
         await client.token_storage.clear()
         client.mark_session_expired("user logout")
-        await message.answer("✅ Tokens cleared. Logged out.")
+        await message.answer("✅ Сессия Domonap завершена.")
 
     @router.callback_query(F.data.startswith("open:"))
     @access.require_access
@@ -357,7 +353,7 @@ async def _auto_open_door(
     if not cooldown.is_ready(user_id, door_id):
         remaining = cooldown.remaining(user_id, door_id)
         await message.answer(
-            f"Please wait {remaining:.0f}s before opening this door again."
+            f"Повторите открытие двери через {remaining:.0f} с."
         )
         return
 
@@ -370,6 +366,6 @@ async def _auto_open_door(
         return
 
     if success:
-        await message.answer(f"✅ Door '{door.name}' opened successfully!")
+        await message.answer(f"✅ {door.name}: дверь открыта.")
     else:
-        await message.answer(f"❌ Failed to open door '{door.name}'.")
+        await message.answer(f"❌ {door.name}: не удалось открыть дверь.")
