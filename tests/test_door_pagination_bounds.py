@@ -42,9 +42,10 @@ async def test_negative_page_is_clamped_to_first_page() -> None:
     await handler(callback)  # type: ignore[operator]
 
     text = callback.message.edit_text.await_args.args[0]
+    lines = text.splitlines()
     keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
-    assert "1. 🚪 Door 1" in text
-    assert "11. 🚪 Door 11" not in text
+    assert "1. 🚪 Door 1" in lines
+    assert "11. 🚪 Door 11" not in lines
     assert any(button.text == "1/2" for row in keyboard.inline_keyboard for button in row)
 
 
@@ -55,7 +56,8 @@ async def test_out_of_range_page_is_clamped_to_last_page() -> None:
     await handler(callback)  # type: ignore[operator]
 
     text = callback.message.edit_text.await_args.args[0]
+    lines = text.splitlines()
     keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
-    assert "11. 🚪 Door 11" in text
-    assert "1. 🚪 Door 1" not in text
+    assert "11. 🚪 Door 11" in lines
+    assert "1. 🚪 Door 1" not in lines
     assert any(button.text == "2/2" for row in keyboard.inline_keyboard for button in row)
