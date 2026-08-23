@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "source": {
+    "package_name": "com.domonap.app",
+    "app_version_code": 9850,
+    "release_date": "2026-07-30",
+    "verification": "runtime-baseline-awaiting-apk-verification"
+  },
+  "hosts": [
+    "api.domonap.ru"
+  ],
+  "headers": [
+    "dom-app",
+    "dom-platform",
+    "instanceId"
+  ],
+  "endpoints": [
+    "POST /sso-api/Authorization/Authorize",
+    "POST /sso-api/Authorization/ConfirmAuthorization",
+    "POST /sso-api/Authorization/RefreshToken",
+    "POST /sso-api/Authorization/UpdateDeviceToken",
+    "POST /sso-api/User/GetUser",
+    "POST /client-api/Key/GetPagedKeysByKeysType",
+    "POST /client-api/Key/GetUserKey",
+    "POST /client-api/Device/OpenRelayByDoorId",
+    "POST /client-api/Device/OpenRelayByKeyId",
+    "POST /client-api/CallLog/GetCallLogs",
+    "POST /communication-api/Call/NotifyCallAnswered",
+    "POST /communication-api/Call/NotifyCallEnded"
+  ],
+  "signalr": {
+    "hub": "/notificationHub",
+    "target": "ReceivePush",
+    "events": [
+      "DomofonCalling",
+      "DomofonCallEnded"
+    ]
+  },
+  "notes": [
+    "The public Android release is 9850 as of 2026-07-30.",
+    "This baseline describes the bot protocol implementation and is intentionally not marked APK-verified yet.",
+    "APK analysis may discover additional official-app endpoints and headers; additions are informational unless they become required for existing operations."
+  ]
+}
