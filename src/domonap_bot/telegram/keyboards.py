@@ -4,7 +4,10 @@ from domonap_bot.domonap.models import CallLogEntry, DoorKey
 
 
 def door_selection_keyboard(doors: list[DoorKey]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=d.name, callback_data=f"open:{d.id}")] for d in doors]
+    rows = [
+        [InlineKeyboardButton(text=d.name, callback_data=f"open:{d.door_id}")]
+        for d in doors
+    ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -22,7 +25,8 @@ def main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
 
 def door_list_keyboard(doors: list[DoorKey], page: int, total_pages: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=f"🚪 {d.name}", callback_data=f"d:det:{d.id}")] for d in doors
+        [InlineKeyboardButton(text=f"🚪 {d.name}", callback_data=f"d:det:{d.door_id}")]
+        for d in doors
     ]
     nav: list[InlineKeyboardButton] = []
     if page > 0:
@@ -38,7 +42,7 @@ def door_list_keyboard(doors: list[DoorKey], page: int, total_pages: int) -> Inl
 
 def door_detail_keyboard(door: DoorKey) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="🔓 Open", callback_data=f"d:open:{door.id}")],
+        [InlineKeyboardButton(text="🔓 Open", callback_data=f"d:open:{door.door_id}")],
     ]
     if door.http_video_url or door.webrtc_video_url:
         url = door.http_video_url or door.webrtc_video_url
