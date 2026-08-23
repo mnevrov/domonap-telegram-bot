@@ -26,7 +26,7 @@ def register_door_handlers(
     cooldown: CooldownManager,
     navigation: NavigationStore | None = None,
 ) -> None:
-    nav = navigation or NavigationStore()
+    nav = navigation if navigation is not None else NavigationStore()
 
     async def _render_door_list(callback: CallbackQuery, page: int) -> None:
         message = editable_callback_message(callback)
