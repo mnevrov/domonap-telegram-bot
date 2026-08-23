@@ -36,7 +36,7 @@ def register_door_handlers(
 
         page_str = data.removeprefix("d:p:")
         try:
-            page = int(page_str)
+            page = max(0, int(page_str))
         except ValueError:
             page = 0
 
@@ -51,6 +51,8 @@ def register_door_handlers(
 
         total = len(doors)
         total_pages = max(1, (total + _PER_PAGE - 1) // _PER_PAGE)
+        if page >= total_pages:
+            page = total_pages - 1
         start = page * _PER_PAGE
         page_doors = doors[start : start + _PER_PAGE]
 
