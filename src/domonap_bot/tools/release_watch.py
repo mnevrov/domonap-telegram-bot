@@ -394,8 +394,14 @@ def main() -> int:
 
     if args.download_apk is not None and (report["changed"] or args.force_download):
         descriptor = fetch_apk_descriptor(int(metadata["app_id"]))
-        if descriptor.version_code is not None and descriptor.version_code != metadata["version_code"]:
-            raise ReleaseWatchError("APK descriptor version does not match release metadata")
+        descriptor_version_mismatch = (
+            descriptor.version_code is not None
+            and descriptor.version_code != metadata["version_code"]
+        )
+        if descriptor_version_mismatch:
+            raise ReleaseWatchError(
+                "APK descriptor version does not match release metadata"
+            )
         report["apk_acquisition"] = download_apk(descriptor, args.download_apk)
         report["apk_downloaded"] = True
     else:
