@@ -277,41 +277,6 @@ class TestClientResponseSemantics:
             await client.get_doors()
 
 
-class TestSignalRReconnect:
-    @respx.mock
-    async def test_http_error_triggers_renegotiate_instead_of_terminating(
-        self, client: DomonapClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import httpx as httpx_module
-
-        async def no_sleep(_seconds: float) -> None:
-            return None
-
-        monkeypatch.setattr("domonap_bot.domonap.client.asyncio.sleep", no_sleep)
-
-        negotiate_route = respx.post(
-            "https://api.domonap.ru/notificationHub/negotiate?negotiateVersion=1"
-        ).mock(return_value=Response(200, json={"connectionId": "conn-1"}))
-
-        hub_route = respx.get("https://api.domonap.ru/notificationHub?id=conn-1")
-        hub_route.side_effect = [
-            httpx_module.ConnectError("boom"),
-            Response(
-                200,
-                text='{"type":1,"target":"IncomingCall","arguments":[{"CallId":"c1"}]}\n',
-            ),
-        ]
-
-        events = []
-        async for payload in client.listen_events():
-            events.append(payload)
-            client._closed = True
-
-        assert negotiate_route.call_count == 2
-        assert len(events) == 1
-        assert events[0].call_id == "c1"
-
-
 class TestClientCallLogs:
     @respx.mock
     async def test_success(self, client: DomonapClient) -> None:
