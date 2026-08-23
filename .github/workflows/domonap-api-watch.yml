@@ -1,0 +1,182 @@
+name: Domonap API Watch
+
+on:
+  schedule:
+    - cron: "27 4 * * *"
+  pull_request:
+    paths:
+      - "contracts/domonap/**"
+      - "src/domonap_bot/domonap/**"
+      - "src/domonap_bot/tools/**"
+      - ".github/workflows/domonap-api-watch.yml"
+  workflow_dispatch:
+    inputs:
+      force_analysis:
+        description: Download and analyze the current APK even if the version is unchanged
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: domonap-api-watch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk-watch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.release.outputs.changed }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check RuStore release
+        id: release
+        shell: bash
+        env:
+          FORCE_ANALYSIS: ${{ github.event_name == 'pull_request' || inputs.force_analysis || false }}
+        run: |
+          set -euo pipefail
+          args=(
+            --contract contracts/domonap/current.json
+            --report /tmp/domonap-release.json
+            --download-apk /tmp/domonap.apk
+          )
+          if [[ "$FORCE_ANALYSIS" == "true" ]]; then
+            args+=(--force-download)
+          fi
+          PYTHONPATH=src python -m domonap_bot.tools.release_watch "${args[@]}"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/domonap-release.json").read_text())
+          print(f"changed={str(bool(report['changed'])).lower()}")
+          print(f"apk_downloaded={str(bool(report['apk_downloaded'])).lower()}")
+          print(f"version={report['current_version_code']}")
+          PY
+
+      - name: Install JADX
+        if: steps.release.outputs.apk_downloaded == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          url="$(gh api repos/skylot/jadx/releases/latest \
+            --jq '.assets[].browser_download_url' \
+            | grep -E '/jadx-[0-9.]+\.zip$' \
+            | head -n1)"
+          test -n "$url"
+          curl --fail --location --silent --show-error "$url" -o /tmp/jadx.zip
+          mkdir -p /tmp/jadx
+          unzip -q /tmp/jadx.zip -d /tmp/jadx
+          test -x /tmp/jadx/bin/jadx
+
+      - name: Decompile Domonap APK
+        if: steps.release.outputs.apk_downloaded == 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/jadx-out
+          set +e
+          /tmp/jadx/bin/jadx --no-debug-info -d /tmp/jadx-out /tmp/domonap.apk
+          jadx_status=$?
+          set -e
+
+          file_count="$(find /tmp/jadx-out -type f | wc -l)"
+          source_count="$(find /tmp/jadx-out -type f \( -name '*.java' -o -name '*.kt' \) | wc -l)"
+          if (( file_count < 100 || source_count < 50 )); then
+            echo "::error::JADX produced too little output: files=${file_count}, sources=${source_count}"
+            exit 1
+          fi
+          if (( jadx_status != 0 )); then
+            echo "::warning::JADX exited ${jadx_status}; continuing with ${file_count} files (${source_count} sources)"
+          fi
+          printf 'jadx_exit_code=%s\nfiles=%s\nsources=%s\n' \
+            "$jadx_status" "$file_count" "$source_count" > /tmp/jadx-status.txt
+
+      - name: Extract and compare protocol
+        if: steps.release.outputs.apk_downloaded == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/domonap-api-watch
+          PYTHONPATH=src python -m domonap_bot.tools.apk_extract \
+            --jadx-dir /tmp/jadx-out \
+            --output /tmp/domonap-api-watch/observed.json
+          PYTHONPATH=src python -m domonap_bot.tools.contract_diff \
+            --baseline contracts/domonap/current.json \
+            --observed /tmp/domonap-api-watch/observed.json \
+            --json-output /tmp/domonap-api-watch/diff.json \
+            --markdown-output /tmp/domonap-api-watch/diff.md
+          cp /tmp/domonap-release.json /tmp/domonap-api-watch/release.json
+          cp /tmp/jadx-status.txt /tmp/domonap-api-watch/jadx-status.txt
+
+      - name: Upload protocol analysis
+        if: steps.release.outputs.apk_downloaded == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: domonap-api-watch-${{ steps.release.outputs.version }}
+          path: /tmp/domonap-api-watch
+          if-no-files-found: error
+          retention-days: 30
+
+  notify-new-release:
+    needs: apk-watch
+    if: github.event_name != 'pull_request' && needs.apk-watch.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Download protocol analysis
+        uses: actions/download-artifact@v4
+        with:
+          name: domonap-api-watch-${{ needs.apk-watch.outputs.version }}
+          path: /tmp/domonap-api-watch
+
+      - name: Open or update release issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.apk-watch.outputs.version }}
+        run: |
+          set -euo pipefail
+          title="[api-watch] Domonap Android ${VERSION} detected"
+          existing="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          {
+            echo "# Automated Domonap API watch"
+            echo
+            echo '```json'
+            cat /tmp/domonap-api-watch/release.json
+            echo '```'
+            echo
+            cat /tmp/domonap-api-watch/diff.md
+            echo
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "Do not automatically apply host/auth/security changes. Review the APK diff first."
+          } > /tmp/issue-body.md
+          if [[ -z "$existing" ]]; then
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body-file /tmp/issue-body.md
+          else
+            gh issue edit \
+              --repo "$GITHUB_REPOSITORY" \
+              "$existing" \
+              --body-file /tmp/issue-body.md
+          fi

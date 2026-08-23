@@ -6,6 +6,7 @@ from aiogram import Bot
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.compatibility import RuntimeCompatibilityMonitor
 from domonap_bot.health import clear_heartbeat, run_heartbeat
 from domonap_bot.logging_config import setup_logging
 from domonap_bot.storage.sqlite import SqliteStorage
@@ -69,6 +70,7 @@ async def main() -> None:
     bot: Bot | None = None
     watcher: CallWatcher | None = None
     heartbeat_task: asyncio.Task[None] | None = None
+    compatibility_monitor: RuntimeCompatibilityMonitor | None = None
 
     try:
         await storage.initialize()
@@ -84,6 +86,13 @@ async def main() -> None:
             phone=settings.domonap_phone,
             register_device_token=settings.domonap_register_device_token,
         )
+        compatibility_monitor = RuntimeCompatibilityMonitor()
+        compatibility_monitor.attach(client._http)
+        logger.info(
+            "Domonap runtime compatibility monitor enabled: profile=%s",
+            compatibility_monitor.report()["profile"]["name"],
+        )
+
         try:
             restored = await client.hydrate_from_storage()
         except TokenStorageEncryptionError as exc:
