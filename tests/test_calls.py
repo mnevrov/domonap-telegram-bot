@@ -174,3 +174,63 @@ class TestCallDetail:
         text = cb.message.edit_text.call_args[0][0]
         assert "Call Details" in text
         assert "Answered" in text
+
+    async def test_detail_sends_photo_before_deleting_old_message(self) -> None:
+        router = Router()
+        client = MagicMock()
+        entry = CallLogEntry(
+            callId="photo-call",
+            caller="John",
+            answered=True,
+            photoUrl="https://example.com/photo.jpg",
+        )
+        client.find_call_log = AsyncMock(return_value=entry)
+        client.get_doors = AsyncMock(return_value=[])
+        access = AccessControl([1])
+        cooldown = CooldownManager()
+        register_call_handlers(router, client, access, cooldown)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "c:det:photo-call"
+        cb.message.delete = AsyncMock()
+
+        async def send_photo_before_delete(**kwargs: object) -> None:
+            assert cb.message.delete.await_count == 0
+            assert kwargs["photo"] == "https://example.com/photo.jpg"
+
+        cb.message.answer_photo = AsyncMock(side_effect=send_photo_before_delete)
+
+        await _handlers(router)["callback_call_detail"](cb)
+
+        cb.message.answer_photo.assert_awaited_once()
+        cb.message.delete.assert_awaited_once()
+        cb.message.edit_text.assert_not_awaited()
+
+    async def test_detail_photo_failure_falls_back_without_deleting_message(self) -> None:
+        router = Router()
+        client = MagicMock()
+        entry = CallLogEntry(
+            callId="broken-photo-call",
+            caller="John",
+            answered=False,
+            photoUrl="https://example.com/broken.jpg",
+        )
+        client.find_call_log = AsyncMock(return_value=entry)
+        client.get_doors = AsyncMock(return_value=[])
+        access = AccessControl([1])
+        cooldown = CooldownManager()
+        register_call_handlers(router, client, access, cooldown)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "c:det:broken-photo-call"
+        cb.message.answer_photo = AsyncMock(side_effect=RuntimeError("media unavailable"))
+        cb.message.delete = AsyncMock()
+
+        await _handlers(router)["callback_call_detail"](cb)
+
+        cb.message.answer_photo.assert_awaited_once()
+        cb.message.delete.assert_not_awaited()
+        cb.message.edit_text.assert_awaited_once()
+        text = cb.message.edit_text.call_args[0][0]
+        assert "Call Details" in text
+        assert "Missed" in text
