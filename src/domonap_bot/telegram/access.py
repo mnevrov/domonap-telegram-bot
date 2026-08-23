@@ -37,7 +37,7 @@ class AccessControl:
         async def wrapper(event: Message | CallbackQuery, *args: Any, **kwargs: Any) -> Any:
             user_id = event.from_user.id if event.from_user else 0
             if not self.is_allowed(user_id):
-                msg = "Access denied."
+                msg = "Доступ запрещён."
                 if isinstance(event, Message):
                     await event.answer(msg)
                 elif isinstance(event, CallbackQuery):
