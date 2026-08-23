@@ -39,7 +39,10 @@ def _make_message(user_id: int) -> MagicMock:
 
 
 def _handlers(router: Router) -> dict[str, object]:
-    return {handler.callback.__name__: handler.callback for handler in router.callback_query.handlers}
+    return {
+        handler.callback.__name__: handler.callback
+        for handler in router.callback_query.handlers
+    }
 
 
 class TestDoorList:
@@ -186,9 +189,9 @@ class TestDoorOpen:
         callback_data = door_detail_keyboard(door).inline_keyboard[0][0].callback_data
         assert callback_data == "d:open:door-456"
 
-        route = respx.post("https://api.domonap.ru/client-api/Device/OpenRelayByDoorId").mock(
-            return_value=Response(200, text="ok")
-        )
+        route = respx.post(
+            "https://api.domonap.ru/client-api/Device/OpenRelayByDoorId"
+        ).mock(return_value=Response(200, text="ok"))
 
         router = Router()
         register_door_handlers(router, client, AccessControl([1]), CooldownManager())
