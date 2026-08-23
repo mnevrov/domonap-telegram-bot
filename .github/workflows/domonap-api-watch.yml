@@ -3,6 +3,12 @@ name: Domonap API Watch
 on:
   schedule:
     - cron: "27 4 * * *"
+  pull_request:
+    paths:
+      - "contracts/domonap/**"
+      - "src/domonap_bot/domONAP/**"
+      - "src/domonap_bot/tools/**"
+      - ".github/workflows/domonap-api-watch.yml"
   workflow_dispatch:
     inputs:
       force_analysis:
@@ -29,7 +35,7 @@ jobs:
         id: release
         shell: bash
         env:
-          FORCE_ANALYSIS: ${{ inputs.force_analysis || false }}
+          FORCE_ANALYSIS: ${{ github.event_name == 'pull_request' || inputs.force_analysis || false }}
         run: |
           set -euo pipefail
           args=(
@@ -97,7 +103,7 @@ jobs:
           retention-days: 30
 
       - name: Open issue for a new Domonap release
-        if: steps.release.outputs.changed == 'true'
+        if: github.event_name != 'pull_request' && steps.release.outputs.changed == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
