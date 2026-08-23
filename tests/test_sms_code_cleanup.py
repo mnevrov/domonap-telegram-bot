@@ -1,6 +1,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from aiogram import Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, User
 
 from domonap_bot.domonap.exceptions import ApiError, NetworkError
@@ -32,17 +34,21 @@ def _message(text: str) -> MagicMock:
     return message
 
 
+def _state(key: str) -> FSMContext:
+    return FSMContext(storage=MemoryStorage(), key=key)
+
+
 async def test_code_message_deleted_after_success() -> None:
     client = MagicMock()
     client.confirm_login = AsyncMock(return_value=True)
     handler = _build_handler(client)
     message = _message("/code 123456")
 
-    await handler(message)  # type: ignore[operator]
+    await handler(message, _state("success"))  # type: ignore[operator]
 
     client.confirm_login.assert_awaited_once_with("123456")
     message.delete.assert_awaited_once()
-    assert "Successfully authorized" in message.answer.await_args.args[0]
+    assert message.answer.await_args.args[0] == "✅ Domonap подключён."
 
 
 async def test_code_message_deleted_after_network_error() -> None:
@@ -51,10 +57,10 @@ async def test_code_message_deleted_after_network_error() -> None:
     handler = _build_handler(client)
     message = _message("/code 123456")
 
-    await handler(message)  # type: ignore[operator]
+    await handler(message, _state("network"))  # type: ignore[operator]
 
     message.delete.assert_awaited_once()
-    assert "Network unavailable" in message.answer.await_args.args[0]
+    assert "Сеть недоступна" in message.answer.await_args.args[0]
 
 
 async def test_code_message_deleted_after_api_error() -> None:
@@ -63,10 +69,10 @@ async def test_code_message_deleted_after_api_error() -> None:
     handler = _build_handler(client)
     message = _message("/code 123456")
 
-    await handler(message)  # type: ignore[operator]
+    await handler(message, _state("api"))  # type: ignore[operator]
 
     message.delete.assert_awaited_once()
-    assert "Authorization failed" in message.answer.await_args.args[0]
+    assert "Ошибка Domonap API" in message.answer.await_args.args[0]
 
 
 async def test_delete_failure_does_not_mask_success() -> None:
@@ -76,7 +82,7 @@ async def test_delete_failure_does_not_mask_success() -> None:
     message = _message("/code 123456")
     message.delete = AsyncMock(side_effect=RuntimeError("cannot delete"))
 
-    await handler(message)  # type: ignore[operator]
+    await handler(message, _state("delete-failure"))  # type: ignore[operator]
 
     message.delete.assert_awaited_once()
-    assert "Successfully authorized" in message.answer.await_args.args[0]
+    assert message.answer.await_args.args[0] == "✅ Domonap подключён."
