@@ -1,15 +1,17 @@
 import asyncio
 import logging
 import time
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from domonap_bot.config import Settings
-from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.client import BASE_URL, DomonapClient
 from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
+from domonap_bot.domonap.signalr import DomonapSignalRTransport
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +20,20 @@ _POLL_INTERVAL = 5.0
 _SIGNALR_RETRY_INTERVAL = 300.0
 
 
+class CallEventSource(Protocol):
+    def listen_once(self) -> AsyncIterator[IncomingCallPayload]: ...
+
+    async def close(self) -> None: ...
+
+
 class CallWatcher:
     def __init__(
         self,
         client: DomonapClient,
         bot: Bot,
         settings: Settings,
+        *,
+        event_source: CallEventSource | None = None,
     ) -> None:
         self._client = client
         self._bot = bot
@@ -31,6 +41,14 @@ class CallWatcher:
         self._task: asyncio.Task[Any] | None = None
         self._seen_ids: set[str] = set()
         self._door_map: dict[str, DoorKey] = {}
+        if event_source is None:
+            self._event_source: CallEventSource = DomonapSignalRTransport(
+                base_url=BASE_URL,
+                token_provider=lambda: self._client.access_token,
+                refresh_callback=self._client.refresh_session,
+            )
+        else:
+            self._event_source = event_source
 
     async def start(self) -> None:
         if not self._settings.call_watcher_enabled:
@@ -45,6 +63,7 @@ class CallWatcher:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        await self._event_source.close()
 
     async def _run(self) -> None:
         await self._wait_for_auth()
@@ -53,15 +72,13 @@ class CallWatcher:
 
         while True:
             try:
-                async for event in self._client.listen_events():
+                async for event in self._event_source.listen_once():
                     await self._handle_payload(event)
-                return  # generator ended cleanly (client closed) — watcher is stopping
+                logger.info("SignalR session ended, using polling before reconnect")
             except asyncio.CancelledError:
                 raise
-            except NotImplementedError:
-                logger.info("listen_events not available, using polling")
             except Exception as exc:
-                logger.warning("listen_events failed (%s), falling back to polling", exc)
+                logger.warning("SignalR session failed (%s), falling back to polling", exc)
 
             await self._poll_loop(max_duration=_SIGNALR_RETRY_INTERVAL)
 
