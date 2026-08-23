@@ -14,6 +14,7 @@ from domonap_bot.storage.tokens import TokenStorage, TokenStorageEncryptionError
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.bot import build_bot
 from domonap_bot.telegram.call_watcher import CallWatcher
+from domonap_bot.telegram.commands import configure_bot_commands
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ async def main() -> None:
 
         access = AccessControl(settings.allowed_telegram_user_ids)
         bot, dp = await build_bot(settings, client, storage, access=access)
+        await configure_bot_commands(bot)
 
         watcher = CallWatcher(client, bot, settings, access=access)
         await watcher.start()
