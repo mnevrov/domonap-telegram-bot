@@ -17,6 +17,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: domonap-api-watch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apk-watch:
     runs-on: ubuntu-latest
@@ -77,7 +81,26 @@ jobs:
 
       - name: Decompile Domonap APK
         if: steps.release.outputs.apk_downloaded == 'true'
-        run: /tmp/jadx/bin/jadx --no-debug-info -d /tmp/jadx-out /tmp/domonap.apk
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/jadx-out
+          set +e
+          /tmp/jadx/bin/jadx --no-debug-info -d /tmp/jadx-out /tmp/domonap.apk
+          jadx_status=$?
+          set -e
+
+          file_count="$(find /tmp/jadx-out -type f | wc -l)"
+          source_count="$(find /tmp/jadx-out -type f \( -name '*.java' -o -name '*.kt' \) | wc -l)"
+          if (( file_count < 100 || source_count < 50 )); then
+            echo "::error::JADX produced too little output: files=${file_count}, sources=${source_count}"
+            exit 1
+          fi
+          if (( jadx_status != 0 )); then
+            echo "::warning::JADX exited ${jadx_status}; continuing with ${file_count} files (${source_count} sources)"
+          fi
+          printf 'jadx_exit_code=%s\nfiles=%s\nsources=%s\n' \
+            "$jadx_status" "$file_count" "$source_count" > /tmp/jadx-status.txt
 
       - name: Extract and compare protocol
         if: steps.release.outputs.apk_downloaded == 'true'
@@ -93,6 +116,7 @@ jobs:
             --json-output /tmp/domonap-api-watch/diff.json \
             --markdown-output /tmp/domonap-api-watch/diff.md
           cp /tmp/domonap-release.json /tmp/domonap-api-watch/release.json
+          cp /tmp/jadx-status.txt /tmp/domonap-api-watch/jadx-status.txt
 
       - name: Upload protocol analysis
         if: steps.release.outputs.apk_downloaded == 'true'
