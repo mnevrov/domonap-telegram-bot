@@ -4,7 +4,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
@@ -252,10 +252,7 @@ class CallWatcher:
     @staticmethod
     def _notification_retry_delay(exc: Exception, attempt: int) -> float | None:
         if isinstance(exc, TelegramRetryAfter):
-            retry_after_raw = exc.retry_after
-            if not isinstance(retry_after_raw, (int, float)):
-                return None
-            retry_after = float(retry_after_raw)
+            retry_after = float(cast(int, exc.retry_after))
             if retry_after > _NOTIFICATION_MAX_RETRY_AFTER:
                 return None
             return max(0.0, retry_after)
