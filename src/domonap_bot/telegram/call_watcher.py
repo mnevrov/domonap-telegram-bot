@@ -140,14 +140,17 @@ class CallWatcher:
             await self._load_door_map()
 
     async def _resolve_door(self, door_id: str | None) -> DoorKey | None:
+        cached = self._door_map.get(door_id) if door_id else None
         await self._ensure_door_map_fresh()
         if not door_id:
             return None
         door = self._door_map.get(door_id)
-        if door is None:
-            await self._ensure_door_map_fresh(force=True)
-            door = self._door_map.get(door_id)
-        return door
+        if door is not None:
+            return door
+        if cached is not None:
+            return cached
+        await self._ensure_door_map_fresh(force=True)
+        return self._door_map.get(door_id)
 
     def _recipient_ids(self) -> list[int]:
         if self._access is not None:
