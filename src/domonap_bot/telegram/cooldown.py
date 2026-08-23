@@ -1,5 +1,7 @@
 from time import monotonic
 
+_MAX_COOLDOWN_ENTRIES = 2048
+
 
 class CooldownManager:
     def __init__(self, timeout: float = 5.0) -> None:
@@ -13,7 +15,13 @@ class CooldownManager:
         return monotonic() - last >= self._timeout
 
     def set(self, user_id: int, action_id: str) -> None:
-        self._cooldowns[(user_id, action_id)] = monotonic()
+        key = (user_id, action_id)
+        if key not in self._cooldowns and len(self._cooldowns) >= _MAX_COOLDOWN_ENTRIES:
+            self.clear_expired()
+            if len(self._cooldowns) >= _MAX_COOLDOWN_ENTRIES:
+                oldest = min(self._cooldowns, key=self._cooldowns.__getitem__)
+                del self._cooldowns[oldest]
+        self._cooldowns[key] = monotonic()
 
     def remaining(self, user_id: int, action_id: str) -> float:
         last = self._cooldowns.get((user_id, action_id))
