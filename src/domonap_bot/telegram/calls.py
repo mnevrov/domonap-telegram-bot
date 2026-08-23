@@ -9,6 +9,7 @@ from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import editable_callback_message
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.keyboards import back_keyboard, call_detail_keyboard, call_list_keyboard
+from domonap_bot.telegram.url_policy import safe_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ def register_call_handlers(
         try:
             doors = await client.get_doors()
             for door in doors:
-                url = door.http_video_url or door.webrtc_video_url
+                url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
                 door_info_map[door.door_id] = (door.name, url)
                 door_info_map[door.id] = (door.name, url)
         except Exception:
@@ -160,11 +161,12 @@ def register_call_handlers(
         text = "\n".join(parts)
 
         kb = call_detail_keyboard(entry.call_id, entry.door_id, video_url)
+        photo_url = safe_http_url(entry.photo_url)
 
-        if entry.photo_url:
+        if photo_url:
             try:
                 await message.answer_photo(
-                    photo=entry.photo_url,
+                    photo=photo_url,
                     caption=text,
                     reply_markup=kb,
                 )
