@@ -17,13 +17,14 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: read
-  issues: write
-
 jobs:
   apk-watch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.release.outputs.changed }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -102,16 +103,31 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Open issue for a new Domonap release
-        if: github.event_name != 'pull_request' && steps.release.outputs.changed == 'true'
+  notify-new-release:
+    needs: apk-watch
+    if: github.event_name != 'pull_request' && needs.apk-watch.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Download protocol analysis
+        uses: actions/download-artifact@v4
+        with:
+          name: domonap-api-watch-${{ needs.apk-watch.outputs.version }}
+          path: /tmp/domonap-api-watch
+
+      - name: Open or update release issue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.apk-watch.outputs.version }}
         run: |
           set -euo pipefail
           title="[api-watch] Domonap Android ${VERSION} detected"
           existing="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
             --state open \
             --search "${title} in:title" \
             --json number \
@@ -120,7 +136,7 @@ jobs:
             echo "# Automated Domonap API watch"
             echo
             echo '```json'
-            cat /tmp/domonap-release.json
+            cat /tmp/domonap-api-watch/release.json
             echo '```'
             echo
             cat /tmp/domonap-api-watch/diff.md
@@ -130,7 +146,13 @@ jobs:
             echo "Do not automatically apply host/auth/security changes. Review the APK diff first."
           } > /tmp/issue-body.md
           if [[ -z "$existing" ]]; then
-            gh issue create --title "$title" --body-file /tmp/issue-body.md
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body-file /tmp/issue-body.md
           else
-            gh issue edit "$existing" --body-file /tmp/issue-body.md
+            gh issue edit \
+              --repo "$GITHUB_REPOSITORY" \
+              "$existing" \
+              --body-file /tmp/issue-body.md
           fi
