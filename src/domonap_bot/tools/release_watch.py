@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import shutil
 import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +18,22 @@ RUSTORE_INFO_URL = (
     "https://backapi.rustore.ru/applicationData/overallInfo/" + PACKAGE_NAME
 )
 RUSTORE_DOWNLOAD_URL = "https://backapi.rustore.ru/applicationData/download-link"
+RUSTORE_DOWNLOAD_V2_URL = "https://backapi.rustore.ru/applicationData/v2/download-link"
 _RUSTORE_CLIENT_VERSION_CODES = (12000, 20000, 99999, 247)
 _MAX_APK_BYTES = 512 * 1024 * 1024
+_SHA256_HEX_LEN = 64
 
 
 class ReleaseWatchError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ApkDescriptor:
+    url: str
+    version_code: int | None
+    signer_sha256: str | None
+    source: str
 
 
 def _json_request(
@@ -102,7 +116,58 @@ def fetch_release_metadata() -> dict[str, Any]:
     }
 
 
-def fetch_apk_url(app_id: int) -> str:
+def _normalize_sha256(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = re.sub(r"[^0-9a-fA-F]", "", value).lower()
+    return normalized if len(normalized) == _SHA256_HEX_LEN else None
+
+
+def _validate_apk_url(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise ReleaseWatchError("RuStore download response has no APK URL")
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ReleaseWatchError("RuStore returned a non-HTTPS APK URL")
+    return value
+
+
+def _fetch_apk_descriptor_v2(app_id: int) -> ApkDescriptor:
+    payload, _ = _request_with_version_fallback(
+        RUSTORE_DOWNLOAD_V2_URL,
+        method="POST",
+        body={
+            "appId": app_id,
+            "firstInstall": True,
+            "screenDensity": 480,
+            "sdkVersion": 35,
+            "withoutSplits": True,
+            "supportedAbis": ["arm64-v8a", "armeabi-v7a", "x86_64", "x86"],
+        },
+    )
+    body = payload.get("body")
+    if not isinstance(body, dict):
+        raise ReleaseWatchError("RuStore v2 download response has no object body")
+    raw_urls = body.get("downloadUrls")
+    if not isinstance(raw_urls, list) or not raw_urls:
+        raise ReleaseWatchError("RuStore v2 download response has no downloadUrls")
+    first = raw_urls[0]
+    if not isinstance(first, dict):
+        raise ReleaseWatchError("RuStore v2 downloadUrls entry is not an object")
+    url = _validate_apk_url(first.get("url"))
+    try:
+        version_code = int(body["versionCode"])
+    except (KeyError, TypeError, ValueError):
+        version_code = None
+    return ApkDescriptor(
+        url=url,
+        version_code=version_code,
+        signer_sha256=_normalize_sha256(body.get("signature")),
+        source="rustore-v2",
+    )
+
+
+def _fetch_apk_descriptor_v1(app_id: int) -> ApkDescriptor:
     payload, _ = _request_with_version_fallback(
         RUSTORE_DOWNLOAD_URL,
         method="POST",
@@ -110,25 +175,28 @@ def fetch_apk_url(app_id: int) -> str:
     )
     body = payload.get("body")
     if not isinstance(body, dict):
-        raise ReleaseWatchError("RuStore download response has no object body")
-    apk_url = body.get("apkUrl")
-    if not isinstance(apk_url, str) or not apk_url:
-        raise ReleaseWatchError("RuStore download response has no apkUrl")
-    parsed = urllib.parse.urlparse(apk_url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise ReleaseWatchError("RuStore returned a non-HTTPS APK URL")
-    return apk_url
+        raise ReleaseWatchError("RuStore v1 download response has no object body")
+    url = _validate_apk_url(body.get("apkUrl"))
+    try:
+        version_code = int(body["versionCode"])
+    except (KeyError, TypeError, ValueError):
+        version_code = None
+    return ApkDescriptor(
+        url=url,
+        version_code=version_code,
+        signer_sha256=None,
+        source="rustore-v1",
+    )
 
 
-def download_apk(url: str, destination: Path) -> None:
-    """Download the APK with system curl while preserving full TLS verification."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise ReleaseWatchError("Refusing to download APK from a non-HTTPS URL")
+def fetch_apk_descriptor(app_id: int) -> ApkDescriptor:
+    try:
+        return _fetch_apk_descriptor_v2(app_id)
+    except ReleaseWatchError:
+        return _fetch_apk_descriptor_v1(app_id)
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    temporary.unlink(missing_ok=True)
+
+def _curl_command(url: str, output: Path, *, insecure: bool) -> list[str]:
     command = [
         "curl",
         "--fail",
@@ -150,28 +218,122 @@ def download_apk(url: str, destination: Path) -> None:
         "=https",
         "--tlsv1.2",
         "--output",
-        str(temporary),
-        url,
+        str(output),
     ]
+    if insecure:
+        command.append("--insecure")
+    command.append(url)
+    return command
+
+
+def _run_curl(url: str, output: Path, *, insecure: bool) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _curl_command(url, output, insecure=insecure),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+def _find_apksigner() -> str | None:
+    direct = shutil.which("apksigner")
+    if direct:
+        return direct
+    android_home = os.getenv("ANDROID_HOME") or os.getenv("ANDROID_SDK_ROOT")
+    if not android_home:
+        return None
+    candidates = sorted(
+        Path(android_home).glob("build-tools/*/apksigner"),
+        reverse=True,
+    )
+    return str(candidates[0]) if candidates else None
+
+
+def _apk_signer_sha256(apk_path: Path) -> str:
+    apksigner = _find_apksigner()
+    if apksigner is None:
+        raise ReleaseWatchError("apksigner is unavailable for APK identity verification")
+    result = subprocess.run(
+        [apksigner, "verify", "--print-certs", str(apk_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise ReleaseWatchError("Downloaded APK failed Android signature verification")
+    match = re.search(
+        r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F:]+)",
+        result.stdout,
+    )
+    if match is None:
+        raise ReleaseWatchError("Cannot read APK signer SHA-256 digest")
+    digest = _normalize_sha256(match.group(1))
+    if digest is None:
+        raise ReleaseWatchError("APK signer digest has an unexpected format")
+    return digest
+
+
+def download_apk(descriptor: ApkDescriptor, destination: Path) -> dict[str, Any]:
+    """Download an APK and verify identity if CDN TLS is misconfigured.
+
+    Normal path requires valid TLS. A curl certificate-chain error may be recovered only
+    when RuStore v2 supplied a SHA-256 signer fingerprint over its independently verified
+    backapi connection. The insecure transport is then only a byte carrier: the APK is
+    accepted if Android cryptographic signature verification succeeds and the signer digest
+    exactly matches the fingerprint supplied by RuStore.
+    """
+    parsed = urllib.parse.urlparse(descriptor.url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ReleaseWatchError("Refusing to download APK from a non-HTTPS URL")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.unlink(missing_ok=True)
+    transport_verified = True
+    signer_verified = False
+
     try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        result = _run_curl(descriptor.url, temporary, insecure=False)
         if result.returncode != 0:
-            detail = result.stderr.strip()[-500:]
-            raise ReleaseWatchError(
-                f"Verified APK download failed with curl {result.returncode}: {detail}"
-            )
+            tls_chain_error = result.returncode == 60
+            if not tls_chain_error or descriptor.signer_sha256 is None:
+                detail = result.stderr.strip()[-500:]
+                raise ReleaseWatchError(
+                    f"Verified APK download failed with curl {result.returncode}: {detail}"
+                )
+            transport_verified = False
+            temporary.unlink(missing_ok=True)
+            retry = _run_curl(descriptor.url, temporary, insecure=True)
+            if retry.returncode != 0:
+                detail = retry.stderr.strip()[-500:]
+                raise ReleaseWatchError(
+                    f"APK fallback transport failed with curl {retry.returncode}: {detail}"
+                )
+
         size = temporary.stat().st_size
         if size <= 0:
             raise ReleaseWatchError("Downloaded APK is empty")
         if size > _MAX_APK_BYTES:
             raise ReleaseWatchError("APK exceeds the configured size limit")
+
+        actual_signer = _apk_signer_sha256(temporary)
+        if descriptor.signer_sha256 is not None:
+            if actual_signer != descriptor.signer_sha256:
+                raise ReleaseWatchError("APK signer does not match RuStore metadata")
+            signer_verified = True
+        elif not transport_verified:
+            raise ReleaseWatchError("Refusing unverified APK without a trusted signer digest")
+
         temporary.replace(destination)
+        return {
+            "source": descriptor.source,
+            "transport_tls_verified": transport_verified,
+            "signer_sha256_verified": signer_verified,
+            "version_code": descriptor.version_code,
+            "size": size,
+        }
     except (OSError, subprocess.TimeoutExpired):
         temporary.unlink(missing_ok=True)
         raise
@@ -231,8 +393,10 @@ def main() -> int:
     report = build_report(metadata, baseline)
 
     if args.download_apk is not None and (report["changed"] or args.force_download):
-        apk_url = fetch_apk_url(int(metadata["app_id"]))
-        download_apk(apk_url, args.download_apk)
+        descriptor = fetch_apk_descriptor(int(metadata["app_id"]))
+        if descriptor.version_code is not None and descriptor.version_code != metadata["version_code"]:
+            raise ReleaseWatchError("APK descriptor version does not match release metadata")
+        report["apk_acquisition"] = download_apk(descriptor, args.download_apk)
         report["apk_downloaded"] = True
     else:
         report["apk_downloaded"] = False
