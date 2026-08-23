@@ -250,12 +250,28 @@ def _find_apksigner() -> str | None:
     return str(candidates[0]) if candidates else None
 
 
+def _extract_sha256_from_apksigner_output(output: str) -> str | None:
+    patterns = (
+        r"certificate\s+SHA-?256\s+digest\s*:\s*([0-9a-fA-F:]+)",
+        r"SHA-?256\s+digest\s*:\s*([0-9a-fA-F:]+)",
+        r"SHA-?256\s*:\s*([0-9a-fA-F:]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, output, flags=re.IGNORECASE)
+        if match is None:
+            continue
+        digest = _normalize_sha256(match.group(1))
+        if digest is not None:
+            return digest
+    return None
+
+
 def _apk_signer_sha256(apk_path: Path) -> str:
     apksigner = _find_apksigner()
     if apksigner is None:
         raise ReleaseWatchError("apksigner is unavailable for APK identity verification")
     result = subprocess.run(
-        [apksigner, "verify", "--print-certs", str(apk_path)],
+        [apksigner, "verify", "--verbose", "--print-certs", str(apk_path)],
         check=False,
         capture_output=True,
         text=True,
@@ -263,15 +279,10 @@ def _apk_signer_sha256(apk_path: Path) -> str:
     )
     if result.returncode != 0:
         raise ReleaseWatchError("Downloaded APK failed Android signature verification")
-    match = re.search(
-        r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F:]+)",
-        result.stdout,
-    )
-    if match is None:
-        raise ReleaseWatchError("Cannot read APK signer SHA-256 digest")
-    digest = _normalize_sha256(match.group(1))
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    digest = _extract_sha256_from_apksigner_output(combined_output)
     if digest is None:
-        raise ReleaseWatchError("APK signer digest has an unexpected format")
+        raise ReleaseWatchError("Cannot read APK signer SHA-256 digest")
     return digest
 
 
