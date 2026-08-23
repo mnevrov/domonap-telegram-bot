@@ -163,14 +163,19 @@ def register_call_handlers(
 
         if entry.photo_url:
             try:
-                await message.delete()
                 await message.answer_photo(
                     photo=entry.photo_url,
                     caption=text,
                     reply_markup=kb,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to send call detail photo: %s", exc)
                 await message.edit_text(text, reply_markup=kb)
+            else:
+                try:
+                    await message.delete()
+                except Exception as exc:
+                    logger.debug("Failed to delete previous call detail message: %s", exc)
         else:
             await message.edit_text(text, reply_markup=kb)
         await callback.answer()
