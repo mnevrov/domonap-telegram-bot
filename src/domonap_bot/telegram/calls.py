@@ -27,7 +27,7 @@ def register_call_handlers(
     navigation: NavigationStore | None = None,
 ) -> None:
     del cooldown
-    nav = navigation or NavigationStore()
+    nav = navigation if navigation is not None else NavigationStore()
 
     async def _render_call_list(callback: CallbackQuery, page: int) -> None:
         message = editable_callback_message(callback)
