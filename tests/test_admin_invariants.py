@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from domonap_bot.config import Settings
 from domonap_bot.telegram.access import AccessControl
-from domonap_bot.telegram.admin import _pending_removals, register_admin_handlers
+from domonap_bot.telegram.admin import register_admin_handlers
 from domonap_bot.telegram.bot import build_bot
 from tests.test_client import FakeStorage
 
@@ -31,18 +31,17 @@ def _callback(user_id: int, data: str) -> MagicMock:
     return callback
 
 
-def _admin_remove_handler(
+def _admin_handlers(
     storage: FakeStorage,
     admin_access: AccessControl,
     access: AccessControl,
-) -> object:
+) -> dict[str, object]:
     router = Router()
     register_admin_handlers(router, MagicMock(), storage, admin_access, access)
-    handlers = {
+    return {
         handler.callback.__name__: handler.callback
         for handler in router.callback_query.handlers
     }
-    return handlers["callback_remove_user"]
 
 
 def test_configured_admin_must_also_be_allowed() -> None:
@@ -83,40 +82,52 @@ async def test_configured_admin_is_active_when_allowed() -> None:
 
 
 async def test_cannot_remove_last_runtime_admin() -> None:
-    _pending_removals.clear()
     storage = FakeStorage()
     await storage.set_user_allowed(1)
     await storage.set_user_admin(1)
     access = AccessControl([1])
     admin_access = AccessControl([1])
-    handler = _admin_remove_handler(storage, admin_access, access)
-    callback = _callback(1, "a:rm:1")
+    handlers = _admin_handlers(storage, admin_access, access)
+    callback = _callback(1, "a:rmc:1")
 
-    await handler(callback)
-    await handler(callback)
+    await handlers["callback_remove_user_confirm"](callback)
 
     assert await storage.is_user_allowed(1) is True
     assert access.is_allowed(1) is True
     assert admin_access.is_allowed(1) is True
-    assert callback.answer.await_args_list[-1].args[0] == "Cannot remove the last admin."
+    assert callback.answer.await_args_list[-1].args[0] == "Нельзя удалить последнего администратора"
     assert callback.answer.await_args_list[-1].kwargs == {"show_alert": True}
 
 
 async def test_can_remove_admin_when_another_admin_remains() -> None:
-    _pending_removals.clear()
     storage = FakeStorage()
     for uid in (1, 2):
         await storage.set_user_allowed(uid)
         await storage.set_user_admin(uid)
     access = AccessControl([1, 2])
     admin_access = AccessControl([1, 2])
-    handler = _admin_remove_handler(storage, admin_access, access)
-    callback = _callback(1, "a:rm:2")
+    handlers = _admin_handlers(storage, admin_access, access)
+    callback = _callback(1, "a:rmc:2")
 
-    await handler(callback)
-    await handler(callback)
+    await handlers["callback_remove_user_confirm"](callback)
 
     assert await storage.is_user_allowed(2) is False
     assert access.is_allowed(2) is False
     assert admin_access.is_allowed(2) is False
     assert admin_access.is_allowed(1) is True
+
+
+async def test_cannot_revoke_last_admin_role() -> None:
+    storage = FakeStorage()
+    await storage.set_user_allowed(1)
+    await storage.set_user_admin(1)
+    access = AccessControl([1])
+    admin_access = AccessControl([1])
+    handlers = _admin_handlers(storage, admin_access, access)
+    callback = _callback(1, "a:revc:1")
+
+    await handlers["callback_revoke_admin_confirm"](callback)
+
+    assert await storage.is_user_admin(1) is True
+    assert admin_access.is_allowed(1) is True
+    assert callback.answer.await_args.args[0] == "Нельзя снять права у последнего администратора"

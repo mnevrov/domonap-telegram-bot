@@ -10,6 +10,7 @@ from domonap_bot.telegram.calls import register_call_handlers
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.doors import register_door_handlers
 from domonap_bot.telegram.handlers import register_handlers
+from domonap_bot.telegram.invites import InviteManager
 from domonap_bot.telegram.menu import register_menu_handlers
 from domonap_bot.telegram.navigation import NavigationStore
 
@@ -45,8 +46,24 @@ async def build_bot(
     register_handlers(router, client, runtime_access, admin_access, cooldown)
 
     if storage is not None:
-        register_menu_handlers(router, client, storage, runtime_access, admin_access, cooldown)
-        register_admin_handlers(router, client, storage, admin_access, runtime_access)
+        invites = InviteManager(storage)
+        register_menu_handlers(
+            router,
+            client,
+            storage,
+            runtime_access,
+            admin_access,
+            cooldown,
+            invites,
+        )
+        register_admin_handlers(
+            router,
+            client,
+            storage,
+            admin_access,
+            runtime_access,
+            invites,
+        )
 
     register_door_handlers(router, client, runtime_access, cooldown, navigation)
     register_call_handlers(router, client, runtime_access, cooldown, navigation)

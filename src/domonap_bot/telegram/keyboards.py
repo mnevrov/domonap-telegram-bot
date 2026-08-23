@@ -170,33 +170,87 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
 def user_list_keyboard(
     users: list[int], admin_users: set[int] | None = None
 ) -> InlineKeyboardMarkup:
+    admin_ids = admin_users or set()
     rows: list[list[InlineKeyboardButton]] = []
     for uid in users:
-        is_admin = admin_users is not None and uid in admin_users
-        label = f"👤 {uid}{' 👑' if is_admin else ''}"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"a:rm:{uid}")])
+        label = f"👤 {uid}{' 👑' if uid in admin_ids else ''}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"a:user:{uid}")])
     rows.append(
         [
             InlineKeyboardButton(
-                text="➕ Добавить пользователя",
-                callback_data="a:add",
+                text="🔗 Пригласить пользователя",
+                callback_data="a:invite",
                 style="primary",
             )
         ]
     )
-    if admin_users is not None:
-        non_admin = [uid for uid in users if uid not in admin_users]
-        if non_admin:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="⬆️ Назначить администратора",
-                        callback_data="a:grant",
-                    )
-                ]
-            )
     rows.append([InlineKeyboardButton(text="← Управление", callback_data="a:panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def user_detail_keyboard(user_id: int, *, is_admin: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if is_admin:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Снять права администратора",
+                    callback_data=f"a:rev:{user_id}",
+                    style="danger",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬆️ Сделать администратором",
+                    callback_data=f"a:grant:{user_id}",
+                    style="primary",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить пользователя",
+                callback_data=f"a:rm:{user_id}",
+                style="danger",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton(text="← Пользователи", callback_data="a:users")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def confirm_remove_user_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить",
+                    callback_data=f"a:rmc:{user_id}",
+                    style="danger",
+                )
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data=f"a:user:{user_id}")],
+        ]
+    )
+
+
+def confirm_revoke_admin_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, снять права",
+                    callback_data=f"a:revc:{user_id}",
+                    style="danger",
+                )
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data=f"a:user:{user_id}")],
+        ]
+    )
 
 
 def back_keyboard(dest: str = "m:main", text: str = "← Назад") -> InlineKeyboardMarkup:
