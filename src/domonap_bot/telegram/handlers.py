@@ -2,7 +2,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import (
@@ -66,7 +66,7 @@ def register_handlers(
         callback: CallbackQuery,
         status: str,
         *,
-        keyboard=None,
+        keyboard: InlineKeyboardMarkup | None = None,
     ) -> bool:
         message = editable_callback_message(callback)
         if message is None:
@@ -257,7 +257,11 @@ def register_handlers(
             return
 
         message = editable_callback_message(callback)
-        keyboard = mark_door_opened(message.reply_markup) if message is not None else None
+        keyboard = (
+            mark_door_opened(message.reply_markup)
+            if success and message is not None
+            else None
+        )
         status = "✅ Дверь открыта." if success else "❌ Не удалось открыть дверь."
         await _render_action_status(callback, status, keyboard=keyboard)
 
@@ -295,7 +299,7 @@ def register_handlers(
                 text="✅ Звонок принят",
                 style="success",
             )
-            if message is not None
+            if success and message is not None
             else None
         )
         status = "✅ Звонок принят." if success else "❌ Не удалось ответить на звонок."
@@ -335,7 +339,7 @@ def register_handlers(
                 text="🔴 Звонок завершён",
                 style="danger",
             )
-            if message is not None
+            if success and message is not None
             else None
         )
         status = "🔴 Звонок завершён." if success else "❌ Не удалось завершить звонок."
