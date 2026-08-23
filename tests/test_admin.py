@@ -68,7 +68,7 @@ class TestAdminPanel:
 
         await handlers["callback_admin_panel"](cb)
 
-        cb.answer.assert_awaited_with("Access denied.", show_alert=True)
+        cb.answer.assert_awaited_with("Доступ запрещён.", show_alert=True)
 
 
 class TestInvites:
