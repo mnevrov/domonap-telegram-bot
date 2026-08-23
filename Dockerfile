@@ -9,7 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ .
 
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
+RUN mkdir -p /app/data \
+    && chmod 700 /app/data \
+    && chown -R appuser:appuser /app
 
 USER appuser
 
