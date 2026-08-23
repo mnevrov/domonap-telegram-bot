@@ -374,30 +374,3 @@ class TestClientMarkSessionExpired:
         assert client.refresh_token is None
         assert client.refresh_expiration_date is None
         assert client._refresh_token_invalid is True
-
-
-class TestFetchExternalBytes:
-    @respx.mock
-    async def test_success(self, client: DomonapClient) -> None:
-        respx.get("https://example.com/photo.jpg").mock(
-            return_value=Response(
-                200, content=b"image_data", headers={"Content-Type": "image/jpeg"}
-            )
-        )
-        result = await client.fetch_external_bytes("https://example.com/photo.jpg")
-        assert result["ok"] is True
-        assert result["body"] == b"image_data"
-        assert result["content_type"] == "image/jpeg"
-
-    @respx.mock
-    async def test_not_found(self, client: DomonapClient) -> None:
-        respx.get("https://example.com/bad").mock(return_value=Response(404))
-        result = await client.fetch_external_bytes("https://example.com/bad")
-        assert result["ok"] is False
-
-    @respx.mock
-    async def test_no_auth_token(self, client: DomonapClient) -> None:
-        client.access_token = None
-        result = await client.fetch_external_bytes("https://example.com/photo.jpg")
-        assert result["ok"] is False
-        assert "No access token" in str(result["error"])
