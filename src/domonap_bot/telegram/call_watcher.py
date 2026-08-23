@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _MAX_SEEN_IDS = 1000
 _POLL_INTERVAL = 5.0
 _SIGNALR_RETRY_INTERVAL = 300.0
+_DOOR_MAP_TTL = 300.0
 
 
 class CallEventSource(Protocol):
@@ -46,6 +47,7 @@ class CallWatcher:
         self._seen_ids: set[str] = set()
         self._seen_order: deque[str] = deque()
         self._door_map: dict[str, DoorKey] = {}
+        self._door_map_loaded_at = 0.0
         if event_source is None:
             self._event_source: CallEventSource = DomonapSignalRTransport(
                 base_url=BASE_URL,
@@ -106,6 +108,7 @@ class CallWatcher:
         deadline = time.monotonic() + max_duration if max_duration is not None else None
         while True:
             try:
+                await self._ensure_door_map_fresh()
                 logs = await self._client.get_call_logs(per_page=10, missed_calls=False)
                 for entry in logs:
                     await self._handle_entry(entry)
@@ -122,11 +125,29 @@ class CallWatcher:
     async def _load_door_map(self) -> None:
         try:
             doors = await self._client.get_doors()
-            for d in doors:
-                self._door_map[d.door_id] = d
-                self._door_map[d.id] = d
+            door_map: dict[str, DoorKey] = {}
+            for door in doors:
+                door_map[door.door_id] = door
+                door_map[door.id] = door
+            self._door_map = door_map
+            self._door_map_loaded_at = time.monotonic()
         except Exception as exc:
             logger.warning("Failed to load door map: %s", exc)
+
+    async def _ensure_door_map_fresh(self, *, force: bool = False) -> None:
+        age = time.monotonic() - self._door_map_loaded_at
+        if force or age >= _DOOR_MAP_TTL:
+            await self._load_door_map()
+
+    async def _resolve_door(self, door_id: str | None) -> DoorKey | None:
+        await self._ensure_door_map_fresh()
+        if not door_id:
+            return None
+        door = self._door_map.get(door_id)
+        if door is None:
+            await self._ensure_door_map_fresh(force=True)
+            door = self._door_map.get(door_id)
+        return door
 
     def _recipient_ids(self) -> list[int]:
         if self._access is not None:
@@ -138,7 +159,7 @@ class CallWatcher:
             return
         self._add_seen(payload.call_id)
 
-        door = self._door_map.get(payload.door_id) if payload.door_id else None
+        door = await self._resolve_door(payload.door_id)
 
         video_url = payload.video_preview
         if not video_url and door:
@@ -161,7 +182,7 @@ class CallWatcher:
             return
         self._add_seen(entry.call_id)
 
-        door = self._door_map.get(entry.door_id) if entry.door_id else None
+        door = await self._resolve_door(entry.door_id)
         video_url = door.http_video_url or door.webrtc_video_url if door else None
 
         await self._send_notification(
