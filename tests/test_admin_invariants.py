@@ -1,7 +1,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from aiogram import Router
 from aiogram.types import CallbackQuery, Message, User
+from pydantic import ValidationError
 
 from domonap_bot.config import Settings
 from domonap_bot.telegram.access import AccessControl
@@ -43,31 +45,13 @@ def _admin_remove_handler(
     return handlers["callback_remove_user"]
 
 
-async def test_configured_admin_must_also_be_allowed() -> None:
-    settings = Settings(
-        telegram_bot_token="123456:TEST-TOKEN",
-        allowed_telegram_user_ids=[1],
-        admin_telegram_user_ids=[2],
-    )
-    client = MagicMock()
-    client.phone = "+79991234567"
-
-    bot, dp = await build_bot(settings, client)
-    try:
-        router = dp.sub_routers[0]
-        handlers = {
-            handler.callback.__name__: handler.callback
-            for handler in router.message.handlers
-        }
-        message = _message(2)
-        message.text = "/auth"
-
-        await handlers["cmd_auth"](message)
-
-        message.answer.assert_awaited_once_with("Access denied.")
-        client.login.assert_not_called()
-    finally:
-        await bot.session.close()
+def test_configured_admin_must_also_be_allowed() -> None:
+    with pytest.raises(ValidationError, match="must be a subset"):
+        Settings(
+            telegram_bot_token="123456:TEST-TOKEN",
+            allowed_telegram_user_ids=[1],
+            admin_telegram_user_ids=[2],
+        )
 
 
 async def test_configured_admin_is_active_when_allowed() -> None:
