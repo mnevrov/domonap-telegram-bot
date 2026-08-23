@@ -33,6 +33,9 @@ BASE_URL = "https://api.domonap.ru"
 DEFAULT_USER_AGENT = "okhttp/5.3.2"
 DEFAULT_DEVICE_PLATFORM = "Android"
 DEFAULT_DOM_APP = "mobile"
+DOOR_KEY_TYPES: tuple[int, ...] = (0, 1, 2, 4, 5, 6)
+_DEFAULT_KEYS_PAGE_SIZE = 100
+_MAX_KEYS_PAGES = 100
 _ANDROID_GUID_RETRY_LIMIT = 8
 _generated_android_guids: set[str] = set()
 
@@ -270,11 +273,7 @@ class DomonapClient:
 
         resp = await _do()
 
-        if (
-            resp.status_code == 401
-            and retry_on_401
-            and bool(self.refresh_token)
-        ):
+        if resp.status_code == 401 and retry_on_401 and bool(self.refresh_token):
             if await self._try_refresh(first_try_access_token):
                 resp = await _do()
 
@@ -297,9 +296,7 @@ class DomonapClient:
         body = resp.text[:2000]
         if resp.status_code in session_rejection_statuses:
             self._invalidate_refresh(f"token rejected with HTTP {resp.status_code}")
-            raise SessionExpiredError(
-                f"HTTP {resp.status_code}: {body}"
-            )
+            raise SessionExpiredError(f"HTTP {resp.status_code}: {body}")
 
         if resp.status_code == 401:
             if self._refresh_token_invalid:
@@ -308,9 +305,7 @@ class DomonapClient:
 
         raise ApiError(f"HTTP {resp.status_code}: {body}")
 
-    async def _try_refresh(
-        self, first_try_access_token: str | None
-    ) -> bool:
+    async def _try_refresh(self, first_try_access_token: str | None) -> bool:
         if not self._ensure_refresh_is_available():
             return False
         async with self._refresh_lock:
@@ -445,9 +440,9 @@ class DomonapClient:
 
     async def get_paged_keys(
         self,
-        per_page: int = 100,
+        per_page: int = _DEFAULT_KEYS_PAGE_SIZE,
         current_page: int = 1,
-        keys_type: str = "Main",
+        keys_type: int = 0,
     ) -> PagedResponse:
         payload = {
             "currentPage": current_page,
@@ -465,19 +460,80 @@ class DomonapClient:
             raise ApiError(f"Unexpected text response: {data}")
         return PagedResponse(
             results=data.get("results", []),
-            current_page=data.get("currentPage", 1),
-            per_page=data.get("perPage", 100),
+            current_page=data.get("currentPage", current_page),
+            per_page=data.get("perPage", per_page),
             total=data.get("total", 0),
         )
 
-    async def get_doors(self) -> list[DoorKey]:
-        paged = await self.get_paged_keys()
+    async def get_all_keys(
+        self,
+        keys_types: tuple[int, ...] = DOOR_KEY_TYPES,
+        per_page: int = _DEFAULT_KEYS_PAGE_SIZE,
+    ) -> list[DoorKey]:
         result: list[DoorKey] = []
-        for item in paged.results:
-            key = DoorKey.model_validate(item)
-            key.raw = item
-            result.append(key)
+        for keys_type in keys_types:
+            current_page = 1
+            for _ in range(_MAX_KEYS_PAGES):
+                paged = await self.get_paged_keys(
+                    per_page=per_page,
+                    current_page=current_page,
+                    keys_type=keys_type,
+                )
+                for item in paged.results:
+                    key = DoorKey.model_validate(item)
+                    key.raw = item
+                    result.append(key)
+
+                effective_per_page = paged.per_page if paged.per_page > 0 else per_page
+                if paged.total > 0:
+                    total_pages = max(
+                        1,
+                        (paged.total + effective_per_page - 1) // effective_per_page,
+                    )
+                    if paged.current_page >= total_pages:
+                        break
+                elif len(paged.results) < effective_per_page:
+                    break
+
+                current_page = max(current_page + 1, paged.current_page + 1)
+            else:
+                logger.warning(
+                    "Stopped key pagination at safety limit: keysType=%s pages=%s",
+                    keys_type,
+                    _MAX_KEYS_PAGES,
+                )
         return result
+
+    async def get_doors(self) -> list[DoorKey]:
+        doors_by_id: dict[str, DoorKey] = {}
+        order: list[str] = []
+
+        for key in await self.get_all_keys():
+            door_id = key.door_id
+            existing = doors_by_id.get(door_id)
+            if existing is None:
+                doors_by_id[door_id] = key
+                order.append(door_id)
+                continue
+
+            updates: dict[str, Any] = {}
+            if not existing.name and key.name:
+                updates["name"] = key.name
+            for field_name in (
+                "domofon_public_pin",
+                "http_video_url",
+                "webrtc_video_url",
+                "video_preview",
+            ):
+                if not getattr(existing, field_name) and getattr(key, field_name):
+                    updates[field_name] = getattr(key, field_name)
+            if key.raw:
+                updates["raw"] = {**key.raw, **existing.raw}
+
+            if updates:
+                doors_by_id[door_id] = existing.model_copy(update=updates)
+
+        return [doors_by_id[door_id] for door_id in order]
 
     async def get_user_key(self, key_id: str) -> DoorKey | None:
         payload = {"keyId": key_id}
@@ -644,7 +700,7 @@ class DomonapClient:
                         backoff,
                     )
                     await asyncio.sleep(backoff)
-                    break  # re-negotiate a fresh connection in the outer loop
+                    break
 
     @staticmethod
     def _parse_signalr_records(text: str) -> list[dict[str, Any]]:
@@ -684,11 +740,7 @@ class DomonapClient:
 
         try:
             resp = await self._http.get(url, headers=request_headers)
-            if (
-                resp.status_code == 401
-                and authorized
-                and bool(self.refresh_token)
-            ):
+            if resp.status_code == 401 and authorized and bool(self.refresh_token):
                 if await self._try_refresh(first_try_access_token):
                     if self.access_token:
                         request_headers["Authorization"] = f"Bearer {self.access_token}"
