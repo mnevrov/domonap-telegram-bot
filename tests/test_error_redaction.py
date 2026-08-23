@@ -31,7 +31,9 @@ def test_authentication_error_discards_upstream_body() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_sms_request_failure_does_not_log_response_body(caplog: pytest.LogCaptureFixture) -> None:
+async def test_sms_request_failure_does_not_log_response_body(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async with httpx.AsyncClient(base_url="https://api.domonap.ru") as http:
         auth = DomonapAuth(http)
         respx.post("https://api.domonap.ru/sso-api/Authorization/Authorize").mock(
