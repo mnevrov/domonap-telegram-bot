@@ -117,7 +117,9 @@ Authorization uses Domonap's SMS-based flow:
 Tokens are stored in SQLite (`data/storage.db` by default) and refreshed automatically when needed. Use `/logout` to clear them.
 
 > ⚠️ SMS codes and tokens are not intentionally written by the bot to application logs.
-> If you enable `LOG_LEVEL=DEBUG`, remember that third-party framework debug logging can be more verbose.
+> `LOG_LEVEL=DEBUG` enables debug output for application code, while sensitive third-party
+> namespaces (`aiosqlite`, Telegram and HTTP clients) stay at INFO or higher so SQL parameters
+> and transport internals are not exposed through dependency-level DEBUG logging.
 
 ## Incoming Call Notifications
 
