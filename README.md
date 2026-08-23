@@ -2,6 +2,8 @@
 
 Telegram bot for controlling Domonap intercom. Works standalone — no Home Assistant required.
 
+For backup/restore, storage-key rotation, deployment checks and dependency maintenance, see [OPERATIONS.md](OPERATIONS.md).
+
 ## Quick start
 
 1. Clone and enter the directory:
