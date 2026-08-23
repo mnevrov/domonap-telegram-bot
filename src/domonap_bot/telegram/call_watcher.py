@@ -252,7 +252,10 @@ class CallWatcher:
     @staticmethod
     def _notification_retry_delay(exc: Exception, attempt: int) -> float | None:
         if isinstance(exc, TelegramRetryAfter):
-            retry_after = float(exc.retry_after)
+            retry_after_raw = exc.retry_after
+            if not isinstance(retry_after_raw, (int, float)):
+                return None
+            retry_after = float(retry_after_raw)
             if retry_after > _NOTIFICATION_MAX_RETRY_AFTER:
                 return None
             return max(0.0, retry_after)
@@ -310,13 +313,16 @@ class CallWatcher:
 
         for uid in user_ids:
             if photo_url:
-                photo_sent = await self._send_with_retry(
-                    lambda uid=uid: self._bot.send_photo(
+                async def send_photo() -> Any:
+                    return await self._bot.send_photo(
                         chat_id=uid,
                         photo=photo_url,
                         caption=text,
                         reply_markup=kb,
-                    ),
+                    )
+
+                photo_sent = await self._send_with_retry(
+                    send_photo,
                     user_id=uid,
                     kind="photo",
                 )
@@ -327,12 +333,15 @@ class CallWatcher:
                     uid,
                 )
 
-            await self._send_with_retry(
-                lambda uid=uid: self._bot.send_message(
+            async def send_text() -> Any:
+                return await self._bot.send_message(
                     chat_id=uid,
                     text=text,
                     reply_markup=kb,
-                ),
+                )
+
+            await self._send_with_retry(
+                send_text,
                 user_id=uid,
                 kind="text",
             )
