@@ -18,6 +18,7 @@ from domonap_bot.telegram.keyboards import (
     door_list_keyboard,
     door_selection_keyboard,
 )
+from domonap_bot.telegram.navigation import NavigationStore
 
 
 def _make_callback(user_id: int) -> MagicMock:
@@ -45,22 +46,38 @@ def _handlers(router: Router) -> dict[str, object]:
     }
 
 
+def _register(
+    router: Router,
+    client: MagicMock,
+    navigation: NavigationStore | None = None,
+) -> NavigationStore:
+    nav = navigation or NavigationStore()
+    register_door_handlers(
+        router,
+        client,
+        AccessControl([1]),
+        CooldownManager(),
+        nav,
+    )
+    return nav
+
+
 class TestDoorList:
     async def test_door_list_empty(self) -> None:
         router = Router()
         client = MagicMock()
         client.get_doors = AsyncMock(return_value=[])
-        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+        _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "d:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_door_list"](cb)
 
         text = cb.message.edit_text.call_args[0][0]
         assert "Доступных дверей нет" in text
         cb.answer.assert_awaited_once()
 
-    async def test_door_list_shows_names_only_as_actions(self) -> None:
+    async def test_door_list_is_direct_open_picker(self) -> None:
         router = Router()
         client = MagicMock()
         client.get_doors = AsyncMock(
@@ -69,21 +86,19 @@ class TestDoorList:
                 DoorKey(id="2", doorId="d2", name="Калитка"),
             ]
         )
-        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+        _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "d:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_door_list"](cb)
 
         text = cb.message.edit_text.call_args[0][0]
         keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
-        assert "Выберите дверь" in text
-        assert "Главный вход" not in text
-        assert any(
-            button.text == "🚪 Главный вход"
-            for row in keyboard.inline_keyboard
-            for button in row
-        )
+        assert "Какую дверь открыть?" in text
+        first = keyboard.inline_keyboard[0][0]
+        assert first.text == "🔓 Главный вход"
+        assert first.callback_data == "d:open:d1"
+        assert first.style == "success"
 
     async def test_callback_acknowledges_before_loading_doors(self) -> None:
         router = Router()
@@ -95,7 +110,7 @@ class TestDoorList:
             return []
 
         client.get_doors = AsyncMock(side_effect=get_doors)
-        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+        _register(router, client)
 
         cb = _make_callback(user_id=1)
 
@@ -104,9 +119,38 @@ class TestDoorList:
 
         cb.answer = AsyncMock(side_effect=answer)
         cb.data = "d:p:0"
-        await router.callback_query.handlers[0].callback(cb)
+        await _handlers(router)["callback_door_list"](cb)
 
         assert events[:2] == ["ack", "api"]
+
+    async def test_back_restores_last_door_page(self) -> None:
+        router = Router()
+        client = MagicMock()
+        doors = [
+            DoorKey(id=str(i), doorId=f"d{i}", name=f"Door {i}")
+            for i in range(1, 12)
+        ]
+        client.get_doors = AsyncMock(return_value=doors)
+        nav = NavigationStore()
+        nav.set_door_page(1, 1)
+        _register(router, client, nav)
+
+        cb = _make_callback(user_id=1)
+        cb.data = "d:back"
+        await _handlers(router)["callback_door_back"](cb)
+
+        keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
+        assert nav.get(1).door_page == 1
+        assert any(
+            button.text == "🔓 Door 11"
+            for row in keyboard.inline_keyboard
+            for button in row
+        )
+        assert any(
+            button.text == "2/2"
+            for row in keyboard.inline_keyboard
+            for button in row
+        )
 
 
 class TestDoorKeyboards:
@@ -118,9 +162,9 @@ class TestDoorKeyboards:
         detail = door_detail_keyboard(door)
 
         assert selection.inline_keyboard[0][0].callback_data == "open:door-456"
-        assert listing.inline_keyboard[0][0].callback_data == "d:det:door-456"
+        assert listing.inline_keyboard[0][0].callback_data == "d:open:door-456"
         assert detail.inline_keyboard[0][0].callback_data == "d:open:door-456"
-        assert detail.inline_keyboard[0][0].style == "success"
+        assert detail.inline_keyboard[-1][0].callback_data == "d:back"
 
 
 class TestDoorDetail:
@@ -137,7 +181,7 @@ class TestDoorDetail:
                 ),
             ]
         )
-        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+        _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "d:det:door-1"
@@ -149,11 +193,11 @@ class TestDoorDetail:
 
 
 class TestDoorOpen:
-    async def test_door_open_success(self) -> None:
+    async def test_door_open_success_returns_contextual_back(self) -> None:
         router = Router()
         client = MagicMock()
         client.open_door = AsyncMock(return_value=True)
-        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+        _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "d:open:door123"
@@ -162,12 +206,14 @@ class TestDoorOpen:
         client.open_door.assert_awaited_once_with("door123")
         assert cb.answer.await_args.kwargs["text"] == "Открываю…"
         assert "✅ Дверь открыта" in cb.message.edit_text.call_args[0][0]
+        keyboard = cb.message.edit_text.call_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].callback_data == "d:back"
 
     async def test_door_open_failure(self) -> None:
         router = Router()
         client = MagicMock()
         client.open_door = AsyncMock(return_value=False)
-        register_door_handlers(router, client, AccessControl([1]), CooldownManager())
+        _register(router, client)
 
         cb = _make_callback(user_id=1)
         cb.data = "d:open:door123"
@@ -176,7 +222,7 @@ class TestDoorOpen:
         assert "❌ Не удалось" in cb.message.edit_text.call_args[0][0]
 
     @respx.mock
-    async def test_keyboard_to_handler_to_http_uses_door_id(self) -> None:
+    async def test_list_keyboard_to_handler_to_http_uses_door_id(self) -> None:
         storage = MagicMock()
         client = DomonapClient(
             token_storage=TokenStorage(storage),
@@ -186,7 +232,7 @@ class TestDoorOpen:
         client.set_tokens("access", "refresh", "2027-01-01T00:00:00+03:00")
 
         door = DoorKey(id="key-123", doorId="door-456", name="Главный вход")
-        callback_data = door_detail_keyboard(door).inline_keyboard[0][0].callback_data
+        callback_data = door_list_keyboard([door], 0, 1).inline_keyboard[0][0].callback_data
         assert callback_data == "d:open:door-456"
 
         route = respx.post(
