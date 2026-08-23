@@ -6,7 +6,7 @@ on:
   pull_request:
     paths:
       - "contracts/domonap/**"
-      - "src/domonap_bot/domONAP/**"
+      - "src/domonap_bot/domonap/**"
       - "src/domonap_bot/tools/**"
       - ".github/workflows/domonap-api-watch.yml"
   workflow_dispatch:
