@@ -18,13 +18,12 @@ class View:
     keyboard: InlineKeyboardMarkup | None = None
 
 
-def home_view(*, authorized: bool, doors_count: int | None, is_admin: bool) -> View:
-    status = "✅ Подключён" if authorized else "⚠️ Не подключён"
-    doors = "—" if doors_count is None else str(doors_count)
-    return View(
-        text=f"🏠 Домофон\n\nСтатус: {status}\nДверей: {doors}",
-        keyboard=main_menu_keyboard(is_admin),
-    )
+def home_view(*, authorized: bool, is_admin: bool) -> View:
+    if authorized:
+        text = "🏠 Домофон\n\nВыберите действие."
+    else:
+        text = "🏠 Домофон\n\n⚠️ Domonap не подключён."
+    return View(text=text, keyboard=main_menu_keyboard(is_admin))
 
 
 def door_list_view(
@@ -35,9 +34,9 @@ def door_list_view(
     total: int,
 ) -> View:
     if not doors:
-        text = "🚪 Двери\n\nДоступных дверей нет."
+        text = "🚪 Открыть дверь\n\nДоступных дверей нет."
     else:
-        text = f"🚪 Двери ({total})\n\nВыберите дверь:"
+        text = f"🚪 Открыть дверь ({total})\n\nКакую дверь открыть?"
     return View(text=text, keyboard=door_list_keyboard(doors, page, total_pages))
 
 
