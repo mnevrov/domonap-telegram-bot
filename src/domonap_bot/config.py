@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,24 @@ class Settings(BaseSettings):
     @classmethod
     def coerce_user_ids(cls, v: Any) -> list[int]:
         return _parse_user_ids(v)
+
+    @model_validator(mode="after")
+    def validate_access_control_ids(self) -> "Settings":
+        for field_name, user_ids in (
+            ("ALLOWED_TELEGRAM_USER_IDS", self.allowed_telegram_user_ids),
+            ("ADMIN_TELEGRAM_USER_IDS", self.admin_telegram_user_ids),
+        ):
+            if any(user_id <= 0 for user_id in user_ids):
+                raise ValueError(f"{field_name} must contain only positive Telegram user IDs")
+
+        allowed = set(self.allowed_telegram_user_ids)
+        unexpected_admins = sorted(set(self.admin_telegram_user_ids) - allowed)
+        if unexpected_admins:
+            raise ValueError(
+                "ADMIN_TELEGRAM_USER_IDS must be a subset of ALLOWED_TELEGRAM_USER_IDS; "
+                f"not allowed: {unexpected_admins}"
+            )
+        return self
 
     @property
     def storage_path_resolved(self) -> Path:
