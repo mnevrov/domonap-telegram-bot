@@ -26,10 +26,7 @@ async def build_bot(
     router = Router()
 
     runtime_access = access or AccessControl(settings.allowed_telegram_user_ids)
-    admin_access = AccessControl(
-        settings.admin_telegram_user_ids,
-        default_allow=False,
-    )
+    admin_access = AccessControl([], default_allow=False)
 
     if storage is not None:
         stored_users = await storage.list_allowed_users()
@@ -37,6 +34,10 @@ async def build_bot(
             runtime_access.add_user(uid)
             if await storage.is_user_admin(uid):
                 admin_access.add_user(uid)
+
+    for uid in settings.admin_telegram_user_ids:
+        if runtime_access.is_allowed(uid):
+            admin_access.add_user(uid)
 
     cooldown = CooldownManager()
     register_handlers(router, client, runtime_access, admin_access, cooldown)
