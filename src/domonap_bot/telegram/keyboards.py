@@ -6,8 +6,14 @@ from domonap_bot.telegram.url_policy import safe_http_url
 
 def door_selection_keyboard(doors: list[DoorKey]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=d.name, callback_data=f"open:{d.door_id}")]
-        for d in doors
+        [
+            InlineKeyboardButton(
+                text=f"🔓 {door.name}",
+                callback_data=f"open:{door.door_id}",
+                style="success",
+            )
+        ]
+        for door in doors
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -15,70 +21,101 @@ def door_selection_keyboard(doors: list[DoorKey]) -> InlineKeyboardMarkup:
 def main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton(text="🚪 Doors", callback_data="d:p:0"),
-            InlineKeyboardButton(text="📞 Calls", callback_data="c:p:0"),
+            InlineKeyboardButton(
+                text="🔓 Открыть дверь",
+                callback_data="d:p:0",
+                style="success",
+            )
         ],
+        [InlineKeyboardButton(text="📞 Звонки", callback_data="c:p:0")],
     ]
     if is_admin:
-        rows.append([InlineKeyboardButton(text="⚙️ Admin", callback_data="a:panel")])
+        rows.append([InlineKeyboardButton(text="⚙️ Управление", callback_data="a:panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def door_list_keyboard(doors: list[DoorKey], page: int, total_pages: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=f"🚪 {d.name}", callback_data=f"d:det:{d.door_id}")]
-        for d in doors
+        [InlineKeyboardButton(text=f"🚪 {door.name}", callback_data=f"d:det:{door.door_id}")]
+        for door in doors
     ]
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"d:p:{page - 1}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"d:p:{page + 1}"))
-    if nav:
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"d:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"d:p:{page + 1}"))
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="🏠 Back", callback_data="m:main")])
+    rows.append([InlineKeyboardButton(text="← Главное меню", callback_data="m:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def door_detail_keyboard(door: DoorKey) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="🔓 Open", callback_data=f"d:open:{door.door_id}")],
+        [
+            InlineKeyboardButton(
+                text="🔓 Открыть",
+                callback_data=f"d:open:{door.door_id}",
+                style="success",
+            )
+        ],
     ]
     video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
     if video_url:
-        rows.append([InlineKeyboardButton(text="📹 Video", url=video_url)])
-    rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="d:p:0")])
+        rows.append([InlineKeyboardButton(text="📹 Камера", url=video_url)])
+    rows.append([InlineKeyboardButton(text="← Двери", callback_data="d:p:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def call_list_keyboard(
-    entries: list[CallLogEntry], page: int, total_pages: int, filter_all: bool
+    entries: list[CallLogEntry],
+    page: int,
+    total_pages: int,
+    filter_missed: bool,
+    *,
+    names_by_call_id: dict[str, str] | None = None,
 ) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
+    names = names_by_call_id or {}
+    rows: list[list[InlineKeyboardButton]] = []
+    for entry in entries:
+        status = "❌" if not entry.answered else "✅"
+        name = names.get(entry.call_id) or entry.caller or entry.call_id[:8]
+        time_text = entry.call_time.strftime("%H:%M") if entry.call_time else "—"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status} {name} · {time_text}",
+                    callback_data=f"c:det:{entry.call_id}",
+                )
+            ]
+        )
+
+    rows.append(
         [
             InlineKeyboardButton(
-                text=f"{'📍' if e.door_id else '📞'} {e.caller or e.call_id[:8]} "
-                f"– {e.call_time.strftime('%H:%M') if e.call_time else '??'} "
-                f"{'❌' if not e.answered else '✅'}",
-                callback_data=f"c:det:{e.call_id}",
-            )
+                text="Все",
+                callback_data="noop" if not filter_missed else "c:f:all",
+                style="primary" if not filter_missed else None,
+            ),
+            InlineKeyboardButton(
+                text="Пропущенные",
+                callback_data="noop" if filter_missed else "c:f:missed",
+                style="primary" if filter_missed else None,
+            ),
         ]
-        for e in entries
-    ]
-    filter_label = "📋 All" if not filter_all else "📋 Missed"
-    filter_data = "c:f:missed" if filter_all else "c:f:all"
-    nav: list[InlineKeyboardButton] = [
-        InlineKeyboardButton(text=filter_label, callback_data=filter_data)
-    ]
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"c:p:{page - 1}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"c:p:{page + 1}"))
-    if len(nav) > 1:
+    )
+
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"c:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"c:p:{page + 1}"))
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="🏠 Back", callback_data="m:main")])
+
+    rows.append([InlineKeyboardButton(text="← Главное меню", callback_data="m:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -87,26 +124,48 @@ def call_detail_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton(text="📞 Answer", callback_data=f"answer:{call_id}"),
-            InlineKeyboardButton(text="🔴 Reject", callback_data=f"reject:{call_id}"),
+            InlineKeyboardButton(
+                text="📞 Ответить",
+                callback_data=f"answer:{call_id}",
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text="Сбросить",
+                callback_data=f"reject:{call_id}",
+                style="danger",
+            ),
         ],
     ]
     if door_id:
-        rows.append([InlineKeyboardButton(text="🔓 Open door", callback_data=f"open:{door_id}")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔓 Открыть дверь",
+                    callback_data=f"open:{door_id}",
+                    style="success",
+                )
+            ]
+        )
     safe_video_url = safe_http_url(video_url)
     if safe_video_url:
-        rows.append([InlineKeyboardButton(text="📹 Video", url=safe_video_url)])
-    rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="c:p:0")])
+        rows.append([InlineKeyboardButton(text="📹 Камера", url=safe_video_url)])
+    rows.append([InlineKeyboardButton(text="← Звонки", callback_data="c:p:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="👥 Users", callback_data="a:users")],
-            [InlineKeyboardButton(text="🔑 /auth", callback_data="a:auth")],
-            [InlineKeyboardButton(text="🚪 /logout", callback_data="a:logout")],
-            [InlineKeyboardButton(text="🏠 Back", callback_data="m:main")],
+            [InlineKeyboardButton(text="👥 Пользователи", callback_data="a:users")],
+            [InlineKeyboardButton(text="🔑 Подключить Domonap", callback_data="a:auth")],
+            [
+                InlineKeyboardButton(
+                    text="Выйти из Domonap",
+                    callback_data="a:logout",
+                    style="danger",
+                )
+            ],
+            [InlineKeyboardButton(text="← Главное меню", callback_data="m:main")],
         ]
     )
 
@@ -117,20 +176,26 @@ def user_list_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     for uid in users:
         is_admin = admin_users is not None and uid in admin_users
-        label = f"👤 {uid}{' 👑' if is_admin else ''}  ❌"
+        label = f"👤 {uid}{' 👑' if is_admin else ''}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"a:rm:{uid}")])
-    rows.append([InlineKeyboardButton(text="➕ Add user", callback_data="a:add")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Добавить пользователя",
+                callback_data="a:add",
+                style="primary",
+            )
+        ]
+    )
     if admin_users is not None:
         non_admin = [uid for uid in users if uid not in admin_users]
         if non_admin:
-            rows.append([InlineKeyboardButton(text="⬆ Grant admin", callback_data="a:grant")])
-    rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="a:panel")])
+            rows.append([InlineKeyboardButton(text="⬆️ Назначить администратора", callback_data="a:grant")])
+    rows.append([InlineKeyboardButton(text="← Управление", callback_data="a:panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def back_keyboard(dest: str = "m:main") -> InlineKeyboardMarkup:
+def back_keyboard(dest: str = "m:main", text: str = "← Назад") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Back", callback_data=dest)],
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=dest)]]
     )
