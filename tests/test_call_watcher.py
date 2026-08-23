@@ -122,7 +122,7 @@ class TestDeduplication:
         call_args = bot.send_message.call_args
         text = call_args[1]["text"]
         assert "Main Entrance" in text
-        assert "Входящий звонок" in text
+        assert "🔔 Звонок в домофон" in text
 
     async def test_trim_seen_ids(
         self, watcher: CallWatcher,
@@ -153,6 +153,7 @@ class TestDeduplication:
         assert kb is not None
         assert kb.inline_keyboard[0][0].callback_data == "open:d1"
         assert kb.inline_keyboard[0][0].text == "🔓 Открыть"
+        assert kb.inline_keyboard[0][0].style == "success"
 
     async def test_keyboard_with_video_url(
         self, watcher: CallWatcher,
@@ -160,7 +161,7 @@ class TestDeduplication:
         kb = watcher._build_keyboard(door_id=None, video_url="https://example.com/video")
         assert kb is not None
         assert kb.inline_keyboard[0][0].url == "https://example.com/video"
-        assert kb.inline_keyboard[0][0].text == "📹 Видео"
+        assert kb.inline_keyboard[0][0].text == "📹 Камера"
 
     async def test_keyboard_with_both(
         self, watcher: CallWatcher,
@@ -183,8 +184,10 @@ class TestDeduplication:
         row = kb.inline_keyboard[0]
         assert row[0].callback_data == "answer:c1"
         assert row[0].text == "📞 Ответить"
+        assert row[0].style == "primary"
         assert row[1].callback_data == "reject:c1"
-        assert row[1].text == "🔴 Сбросить"
+        assert row[1].text == "Сбросить"
+        assert row[1].style == "danger"
 
     async def test_handle_entry_notification_includes_call_buttons(
         self, watcher: CallWatcher, bot: MagicMock,
@@ -206,23 +209,24 @@ class TestDeduplication:
     ) -> None:
         door = DoorKey(id="k1", door_id="d1", name="Entrance")
         text = watcher._build_message_text(door=door)
-        assert "Входящий звонок" in text
-        assert "Entrance" in text
-        assert "Время" in text
+        assert "🔔 Звонок в домофон" in text
+        assert "🚪 Entrance" in text
+        assert "🕘" in text
 
     async def test_message_text_with_address(
         self, watcher: CallWatcher,
     ) -> None:
         text = watcher._build_message_text(address="ул. Ленина, д. 1")
-        assert "ул. Ленина, д. 1" in text
-        assert "Входящий звонок" in text
+        assert "📍 ул. Ленина, д. 1" in text
+        assert "🔔 Звонок в домофон" in text
 
     async def test_message_text_with_call_time(
         self, watcher: CallWatcher,
     ) -> None:
         t = datetime(2024, 6, 15, 14, 30, 0, tzinfo=timezone.utc)
         text = watcher._build_message_text(call_time=t)
-        assert "14:30:00" in text
+        assert "🕘 14:30" in text
+        assert "14:30:00" not in text
 
     async def test_message_text_door_takes_precedence(
         self, watcher: CallWatcher,
