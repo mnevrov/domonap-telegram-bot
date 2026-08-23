@@ -160,7 +160,7 @@ class TestDoorOpen:
         await _handlers(router)["callback_door_open"](cb)
 
         client.open_door.assert_awaited_once_with("door123")
-        assert cb.answer.await_args.args[0] == "Открываю…"
+        assert cb.answer.await_args.kwargs["text"] == "Открываю…"
         assert "✅ Дверь открыта" in cb.message.edit_text.call_args[0][0]
 
     async def test_door_open_failure(self) -> None:
