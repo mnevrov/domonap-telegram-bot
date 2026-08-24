@@ -115,7 +115,7 @@ class TestAccessControl:
         msg = _make_message(user_id=99)
         result = await handler(msg)
         assert result is None
-        msg.answer.assert_awaited_once_with("Access denied.")
+        msg.answer.assert_awaited_once_with("Доступ запрещён.")
 
     async def test_require_access_with_callback_shows_alert(self) -> None:
         ac = AccessControl([1])
@@ -127,32 +127,32 @@ class TestAccessControl:
         cb = _make_callback(user_id=99)
         result = await handler(cb)
         assert result is None
-        cb.answer.assert_awaited_once_with("Access denied.", show_alert=True)
+        cb.answer.assert_awaited_once_with("Доступ запрещён.", show_alert=True)
 
 
 class TestDescribeError:
     def test_token_expired(self) -> None:
         msg = _describe_error(TokenExpiredError("no token"))
-        assert "expired" in msg
+        assert "Сессия истекла" in msg
 
     def test_session_expired(self) -> None:
         msg = _describe_error(SessionExpiredError("gone"))
-        assert "expired" in msg
+        assert "Сессия истекла" in msg
 
     def test_network_error(self) -> None:
         msg = _describe_error(NetworkError("timeout"))
-        assert "Network unavailable" in msg
+        assert "Сеть недоступна" in msg
 
     def test_generic_api_error(self) -> None:
         msg = _describe_error(DomonapError("something broke"))
-        assert "API error" in msg
+        assert "Ошибка Domonap API" in msg
 
     def test_unknown_subclass(self) -> None:
         class MyError(DomonapError):
             pass
 
         msg = _describe_error(MyError("custom"))
-        assert "API error" in msg
+        assert "Ошибка Domonap API" in msg
 
 
 class TestCallbackDataParsing:
@@ -245,7 +245,7 @@ class TestAdminAccess:
         msg = _make_message(user_id=99)
         result = await handler(msg)
         assert result is None
-        msg.answer.assert_awaited_once_with("Access denied.")
+        msg.answer.assert_awaited_once_with("Доступ запрещён.")
 
 
 class TestMaskPhone:
@@ -308,7 +308,7 @@ class TestAuthSurface:
         text = msg.answer.await_args.args[0]
         assert "+799***67" in text
         assert "+79991234567" not in text
-        assert "Authenticated: ✅" in text
+        assert "Domonap: ✅ подключён" in text
 
 
 class TestAnswerAndEndCall:
@@ -382,7 +382,7 @@ class TestAnswerAndEndCall:
         cb.message.edit_text.assert_awaited_once()
         text = cb.message.edit_text.await_args.args[0]
         assert "🔔 Звонок в домофон" in text
-        assert "API error" in text
+        assert "Ошибка Domonap API" in text
 
     async def test_answer_call_respects_cooldown(self) -> None:
         client = MagicMock()
@@ -427,7 +427,7 @@ class TestAnswerAndEndCall:
 
         cb.message.edit_text.assert_awaited_once()
         assert "🔔 Звонок в домофон" in cb.message.edit_text.await_args.args[0]
-        assert "API error" in cb.message.edit_text.await_args.args[0]
+        assert "Ошибка Domonap API" in cb.message.edit_text.await_args.args[0]
 
     async def test_open_door_success_marks_only_door_action(self) -> None:
         client = MagicMock()
