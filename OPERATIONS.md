@@ -100,7 +100,7 @@ The integration is not a documented public API. Production maintenance combines 
 
 Community sources run in partial-observation mode: new markers can raise findings, but missing markers do not imply removal. This prevents false HIGH removal storms from incomplete source snapshots.
 
-The live canary uses `DOMONAP_CANARY_ACCESS_TOKEN` from a dedicated low-privilege account when such a credential is available. If the secret is absent, the workflow reports `skipped` and remains non-blocking; static APK analysis, runtime monitoring and community watch continue to provide compatibility evidence. If credentials are later configured, actual canary degradation remains a blocking failure and opens a dedicated issue.
+The live canary uses `DOMONAP_CANARY_ACCESS_TOKEN` from a dedicated low-privilege account when such a credential is available. If the secret is absent, the workflow reports `skipped` and remains non-blocking; static APK analysis, runtime monitoring and community watch continue to provide compatibility evidence. If credentials are later configured, actual canary degradation remains a blocking failure and opens a dedicated issue. Live verification is currently intentionally deferred because no suitable token is available.
 
 ## Dependency maintenance
 
