@@ -7,7 +7,7 @@ The maintenance loop uses independent evidence with different trust levels:
 1. **Runtime monitor** — passively observes structural response compatibility for endpoints actually used by the bot.
 2. **RuStore release watch** — detects a new `com.domonap.app` Android release.
 3. **Official APK analysis** — downloads the APK, verifies provenance/signature and extracts protocol markers after JADX decompilation.
-4. **Live canary** — performs a very small set of non-mutating requests against the real service.
+4. **Live canary** — optionally performs a very small set of non-mutating requests against the real service when a canary credential is configured.
 5. **Community watch** — uses selected sources from `svmironov/domonap_intercom` only as an early-warning sensor.
 
 No source is allowed to change trusted hosts, authorization routing or mutating production endpoints automatically.
@@ -101,7 +101,7 @@ This distinction is essential for community integrations, where scanning a few s
 
 Workflow: `.github/workflows/domonap-live-canary.yml`.
 
-Required repository secret: `DOMONAP_CANARY_ACCESS_TOKEN`.
+Optional repository secret: `DOMONAP_CANARY_ACCESS_TOKEN`.
 
 Use a dedicated low-privilege Domonap account when possible.
 
@@ -118,9 +118,11 @@ Only response shapes are stored.
 
 ### Missing canary credentials
 
-A missing canary secret is no longer silently treated as successful monitoring. The workflow runs the probe in strict mode. If `DOMONAP_CANARY_ACCESS_TOKEN` is absent, the run fails and `[api-canary] Domonap live canary not configured` is opened/updated.
+A missing canary secret is explicit but non-blocking. If `DOMONAP_CANARY_ACCESS_TOKEN` is absent, the report contains `overall: skipped`, the workflow succeeds, and no configuration issue is opened. This allows production hardening and releases to proceed when a suitable canary credential is temporarily unavailable.
 
-If live compatibility is degraded, `[api-canary] Domonap live compatibility degraded` is opened/updated. A later compatible run closes stale canary issues automatically.
+Once a credential is configured, actual live incompatibility remains blocking: `degraded` or probe execution failure opens/updates `[api-canary] Domonap live compatibility degraded` and fails the workflow. A later compatible run closes that issue automatically.
+
+A skipped canary must not be described as live-verified evidence. In this state the project relies on the official APK analysis, passive runtime monitor and community sensor until a credential becomes available.
 
 ## Community watch
 
@@ -144,7 +146,7 @@ When Android version `N` is detected:
 4. review every SECURITY/HIGH/MEDIUM finding;
 5. distinguish runtime contract from statically observed markers;
 6. compare passive runtime compatibility;
-7. require a compatible live canary when credentials are configured;
+7. require a compatible live canary only when credentials are configured;
 8. update implementation/tests only for confirmed changes;
 9. update `contracts/domonap/current.json`;
 10. choose only the strongest verification state justified by evidence;
@@ -199,11 +201,10 @@ PYTHONPATH=src python -m domonap_bot.tools.contract_diff \
   --partial-observation
 ```
 
-Read-only live probe:
+Read-only live probe when a credential is available:
 
 ```bash
 DOMONAP_CANARY_ACCESS_TOKEN='...' \
 PYTHONPATH=src python -m domonap_bot.tools.api_probe \
-  --output /tmp/canary.json \
-  --strict-missing-token
+  --output /tmp/canary.json
 ```
