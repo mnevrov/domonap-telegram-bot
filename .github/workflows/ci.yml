@@ -49,7 +49,13 @@ jobs:
 
       - name: Validate Docker Compose
         run: |
+          set -euo pipefail
           touch .env
-          docker compose config
+          docker compose config > /tmp/compose-local.yml
           DOMONAP_BOT_IMAGE=ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0 \
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+            docker compose -f docker-compose.prod.yml config > /tmp/compose-production.yml
+          if grep -qE '^[[:space:]]+build:' /tmp/compose-production.yml; then
+            echo '::error::Production Compose must not contain build directives'
+            exit 1
+          fi
+          grep -q 'ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0' /tmp/compose-production.yml
