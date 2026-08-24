@@ -185,7 +185,13 @@ docker compose -f docker-compose.prod.yml up -d
 
 Rollback выполняется заменой `DOMONAP_BOT_IMAGE` на предыдущий immutable release tag и повторным `pull/up -d` с `-f docker-compose.prod.yml`.
 
-## 11. Обновление из исходников
+## 11. Live Canary
+
+Read-only Live Canary для реального Domonap API поддерживается workflow `.github/workflows/domonap-live-canary.yml`, но пока является необязательным контролем.
+
+Если repository secret `DOMONAP_CANARY_ACCESS_TOKEN` отсутствует, workflow явно показывает `skipped`, но не блокирует CI или production hardening. После добавления secret те же проверки автоматически начнут контролировать реальные user/keys/call-log/SignalR endpoints; обнаруженная деградация будет блокирующей.
+
+## 12. Обновление из исходников
 
 Для dev/local deployment:
 
@@ -197,7 +203,7 @@ docker compose ps
 
 Для production предпочтительнее immutable GHCR image из release workflow, а не сборка текущего checkout непосредственно на сервере.
 
-## 12. Диагностика
+## 13. Диагностика
 
 ```bash
 docker compose ps
