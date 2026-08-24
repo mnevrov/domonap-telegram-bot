@@ -101,3 +101,36 @@ def test_contract_diff_flags_security_and_breaking_changes() -> None:
         "Expected endpoint disappeared: /client-api/Key/GetPagedKeysByKeysType" in messages
     )
     assert "Expected endpoint disappeared: /client-api/CallLog/GetCallLogs" not in messages
+
+
+def test_partial_observation_does_not_infer_removals() -> None:
+    baseline = {
+        "trusted_hosts": ["api.domonap.ru"],
+        "observed_hosts": ["api.domonap.ru"],
+        "observed_headers": ["dom-app", "dom-platform", "instanceId"],
+        "observed_endpoints": [
+            "POST /client-api/Key/GetPagedKeysByKeysType",
+            "POST /client-api/CallLog/GetCallLogs",
+        ],
+        "signalr": {
+            "hub": "/notificationHub",
+            "target": "ReceivePush",
+            "events": ["DomofonCalling", "DomofonCallAnswered"],
+        },
+    }
+    observed = {
+        "hosts": [],
+        "api_hosts": [],
+        "headers": ["device-info"],
+        "endpoints": [],
+        "signalr": {"hubs": [], "targets": [], "events": []},
+    }
+
+    findings = compare_contracts(baseline, observed, report_missing=False)
+    messages = {item.message for item in findings}
+    severities = {item.severity for item in findings}
+
+    assert not any("disappeared" in message for message in messages)
+    assert not any("missing" in message.lower() for message in messages)
+    assert "HIGH" not in severities
+    assert "New client header marker: device-info" in messages

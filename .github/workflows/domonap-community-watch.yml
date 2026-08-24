@@ -13,9 +13,9 @@ jobs:
   upstream-watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -48,7 +48,8 @@ jobs:
             --baseline contracts/domonap/current.json \
             --observed /tmp/domonap-community-watch/observed.json \
             --json-output /tmp/domonap-community-watch/diff.json \
-            --markdown-output /tmp/domonap-community-watch/diff.md
+            --markdown-output /tmp/domonap-community-watch/diff.md \
+            --partial-observation
           cp /tmp/domonap-upstream/commit.txt /tmp/domonap-community-watch/upstream-commit.txt
 
       - name: Read severity
@@ -94,10 +95,31 @@ jobs:
             echo
             cat /tmp/domonap-community-watch/diff.md
             echo
-            echo "This source is a sensor, not a source of truth. Verify against the official APK/live API."
+            echo "This is a partial-source sensor. Missing markers are not interpreted as removals."
+            echo "Verify additions against the official APK/live API before changing production trust."
           } > /tmp/community-issue.md
           if [[ -z "$existing" ]]; then
             gh issue create --title "$title" --body-file /tmp/community-issue.md
           else
             gh issue edit "$existing" --body-file /tmp/community-issue.md
+          fi
+
+      - name: Close stale community-drift issue
+        if: >-
+          steps.diff.outputs.severity == 'LOW' ||
+          steps.diff.outputs.severity == 'INFO'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="[api-community] Domonap integration protocol drift"
+          existing="$(gh issue list \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue close "$existing" \
+              --comment "Resolved automatically: partial community sources no longer infer removals from absent markers. No actionable MEDIUM/HIGH/SECURITY additions remain."
           fi

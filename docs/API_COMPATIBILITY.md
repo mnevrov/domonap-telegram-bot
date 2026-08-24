@@ -1,212 +1,188 @@
 # Domonap API compatibility automation
 
-Domonap does not expose a stable public API contract for this bot. Treat the integration as a
-compatibility layer for the official Android client rather than as a versioned public REST API.
+Domonap does not expose a stable public API contract for this bot. The integration must be treated as a compatibility layer for the official Android application, not as a versioned public REST API.
 
-The maintenance loop therefore uses several independent signals:
+The maintenance loop uses independent evidence with different trust levels:
 
-1. **Runtime monitor** — passively observes the shape of real API responses used by the bot.
-2. **RuStore release watch** — detects a new `com.domonap.app` Android version.
-3. **APK static analysis** — downloads the current APK, decompiles it with JADX and extracts
-   hosts, header markers, REST paths, SignalR hub/target/events and app version markers.
-4. **Live canary** — optional non-mutating requests against the real service.
-5. **Community watch** — compares protocol markers from `svmironov/domonap_intercom` as an
-   early-warning sensor. It is never treated as the source of truth.
+1. **Runtime monitor** — passively observes structural response compatibility for endpoints actually used by the bot.
+2. **RuStore release watch** — detects a new `com.domonap.app` Android release.
+3. **Official APK analysis** — downloads the APK, verifies provenance/signature and extracts protocol markers after JADX decompilation.
+4. **Live canary** — optionally performs a very small set of non-mutating requests against the real service when a canary credential is configured.
+5. **Community watch** — uses selected sources from `svmironov/domonap_intercom` only as an early-warning sensor.
+
+No source is allowed to change trusted hosts, authorization routing or mutating production endpoints automatically.
 
 ## Contract baseline
 
-The checked-in baseline is `contracts/domonap/current.json`.
+The checked-in baseline is:
 
-The version in `source.app_version_code` is provenance: it identifies the public Android release
-against which the contract is maintained. It is not an API version advertised by Domonap.
+```text
+contracts/domonap/current.json
+```
 
-A baseline can have one of these practical states:
+`source.app_version_code` identifies the public Android release used as provenance. It is not an API version published by Domonap.
 
-- `runtime-baseline-awaiting-apk-verification` — known working behavior, APK verification pending;
-- `apk-verified-partial-static` — the APK origin/signature and static markers were checked, but a
-  partial JADX result does not prove that every runtime endpoint must be visible as a literal;
-- `apk-verified` — static extraction was complete enough to verify all claimed APK markers;
-- `apk-and-live-verified` — APK markers and the safe live canary agree with the baseline.
+Practical verification states:
 
-Do not change the verification state merely because a community integration changed.
+- `runtime-baseline-awaiting-apk-verification`;
+- `apk-verified-partial-static`;
+- `apk-verified`;
+- `apk-and-live-verified`.
 
-The baseline deliberately separates different trust levels:
+The baseline separates:
 
-- `trusted_hosts` — origins to which authenticated requests may be sent;
-- `observed_hosts` — host strings seen in the official APK, including development/web hosts;
-- `endpoints` — runtime API operations required by the bot implementation;
-- `observed_endpoints` — endpoint literals independently proven by static APK extraction;
-- `required_headers` — request metadata the bot currently relies on;
-- `observed_headers` — header markers seen in the official APK.
+- `trusted_hosts` — origins allowed to receive authenticated requests;
+- `observed_hosts` — host strings seen in official APK evidence;
+- `endpoints` — runtime operations required by this bot;
+- `observed_endpoints` — endpoints independently visible in static APK evidence;
+- `required_headers` — metadata currently required by runtime;
+- `observed_headers` — markers found in the official APK.
 
-An item appearing in an `observed_*` list is evidence that the official client contains the marker;
-it does not automatically make that marker trusted or required by the bot.
+An `observed_*` marker is evidence, not permission.
 
 ## Runtime monitor
 
-`RuntimeCompatibilityMonitor` is attached to the existing `httpx.AsyncClient` at startup. It
-writes a value-free report to:
+`RuntimeCompatibilityMonitor` is attached to the existing `httpx.AsyncClient`.
+
+It writes a value-free structural report to:
 
 ```text
 /tmp/domonap-api-compatibility.json
 ```
 
-Only the following information is persisted:
+Persisted data is limited to:
 
-- request method and path;
+- method/path;
 - HTTP status;
-- JSON key/type structure;
+- JSON key/type shape;
 - missing required fields;
-- observation timestamp.
+- observation time.
 
-Response values, request bodies, bearer tokens and authorization headers are never persisted.
-The report is atomic and can be collected by external monitoring without affecting bot behavior.
+Request bodies, response values, bearer tokens and authorization headers are not persisted.
 
-Runtime states:
+States: `compatible`, `warning`, `degraded`, `unknown`.
 
-- `compatible` — observed known endpoints match required structural invariants;
-- `warning` — upstream HTTP errors were observed;
-- `degraded` — a known successful endpoint returned an incompatible structure;
-- `unknown` — no known API response has been observed yet.
+A contract mismatch is also logged as an application error. The monitor is passive and never rewrites requests.
 
-The monitor is passive. It does not rewrite requests, discover replacement hosts or modify
-protocol settings automatically.
-
-## Scheduled APK watch
+## Official APK watch
 
 Workflow: `.github/workflows/domonap-api-watch.yml`.
 
-It runs daily and can also be started manually. Compatibility pull requests force analysis of the
-current APK so that changes to the extraction logic are exercised before merge.
+It runs daily and on compatibility-related pull requests. It queries RuStore metadata, verifies APK provenance/signer, decompiles with JADX, extracts hosts/headers/endpoints/SignalR markers, compares the result with the baseline, uploads evidence and opens an issue for a new Android release.
 
-The workflow:
-
-1. queries RuStore metadata for `com.domonap.app`;
-2. compares the published `versionCode` with the checked-in baseline;
-3. obtains the APK descriptor and signer fingerprint from the TLS-verified RuStore backend;
-4. attempts a normal TLS-verified APK download;
-5. if the RuStore CDN has an incomplete certificate chain, permits a transport fallback only when
-   the downloaded APK's Android signer SHA-256 exactly matches the independently obtained RuStore
-   signer fingerprint;
-6. installs the latest JADX release and decompiles the APK;
-7. accepts partial JADX output only when a substantial source tree was actually produced and
-   records the exit code/file counts as analysis-quality metadata;
-8. creates a value-free structural observation and evidence file paths;
-9. compares it with `contracts/domonap/current.json`;
-10. uploads the analysis as a GitHub Actions artifact;
-11. opens or updates an issue when a new Android version is detected.
-
-The RuStore installation backend used for APK retrieval is not a documented publisher API, so a
-failure of that source must be treated as a monitoring failure rather than evidence that the
-Domonap API itself changed.
-
-The APK binary itself is never trusted merely because it downloaded successfully. A TLS-fallback
-APK is accepted only after independent Android signer verification.
+A source/download failure is a monitoring failure, not proof that Domonap changed.
 
 ## Diff severity
 
-`contract_diff.py` classifies findings as follows:
-
 | Severity | Meaning | Automatic action |
 |---|---|---|
-| `SECURITY` | new API-like host/origin or similarly trust-sensitive change | report only |
-| `HIGH` | a previously APK-observed endpoint, trusted host, SignalR hub/target/event disappeared | report only |
-| `MEDIUM` | potentially required request metadata/header changed | report only |
-| `LOW` | new endpoint/event/capability or non-API host marker discovered | report only |
+| `SECURITY` | new API-like origin or trust-sensitive change | report only |
+| `HIGH` | removal/change with strong complete-source evidence | report only |
+| `MEDIUM` | potentially required metadata change | report only |
+| `LOW` | new capability/non-API marker | report only |
 | `INFO` | no meaningful drift | none |
 
-A bot runtime endpoint that was never visible in the static APK output is not declared removed
-merely because JADX cannot find its string. Runtime monitoring/live canary provide the stronger
-signal for those operations.
+No finding automatically alters production trust.
 
-No finding changes the trusted API origin, Authorization routing, door-control endpoints or
-production contract automatically.
+### Complete vs partial observations
+
+`contract_diff.py` has two modes.
+
+Normal APK analysis is treated as sufficiently broad evidence to report missing previously observed markers.
+
+`--partial-observation` is used when the source is intentionally incomplete. In that mode:
+
+- new hosts/headers/endpoints/events are still reported;
+- absent hosts/headers/endpoints/events are **not** interpreted as removals.
+
+This distinction is essential for community integrations, where scanning a few source files cannot prove that an official APK capability disappeared.
 
 ## Live canary
 
 Workflow: `.github/workflows/domonap-live-canary.yml`.
 
-The canary is disabled automatically when repository secret `DOMONAP_CANARY_ACCESS_TOKEN` is not
-configured. When the secret exists, only these operations are performed:
+Optional repository secret: `DOMONAP_CANARY_ACCESS_TOKEN`.
+
+Use a dedicated low-privilege Domonap account when possible.
+
+Allowed probes:
 
 - `POST /sso-api/User/GetUser`;
-- `POST /client-api/Key/GetPagedKeysByKeysType` with a single-item page;
-- `POST /client-api/CallLog/GetCallLogs` with a single-item page;
+- `POST /client-api/Key/GetPagedKeysByKeysType` with one result;
+- `POST /client-api/CallLog/GetCallLogs` with one result;
 - SignalR `/notificationHub/negotiate`.
 
-The probe intentionally does **not** call:
+Explicitly prohibited: SMS authorization, refresh-token rotation, `UpdateDeviceToken`, door opening and call answer/end.
 
-- SMS authorization;
-- refresh-token rotation;
-- `UpdateDeviceToken`;
-- `OpenRelayByDoorId` or `OpenRelayByKeyId`;
-- call answer/end methods.
+Only response shapes are stored.
 
-Use a dedicated low-privilege test account when possible. The workflow stores only response
-shapes in artifacts/issues, never response values.
+### Missing canary credentials
 
-An access token can expire. An expired token is reported as degradation and must not be confused
-with a protocol change until authentication state is checked.
+A missing canary secret is explicit but non-blocking. If `DOMONAP_CANARY_ACCESS_TOKEN` is absent, the report contains `overall: skipped`, the workflow succeeds, and no configuration issue is opened. This allows production hardening and releases to proceed when a suitable canary credential is temporarily unavailable.
+
+Once a credential is configured, actual live incompatibility remains blocking: `degraded` or probe execution failure opens/updates `[api-canary] Domonap live compatibility degraded` and fails the workflow. A later compatible run closes that issue automatically.
+
+A skipped canary must not be described as live-verified evidence. In this state the project relies on the official APK analysis, passive runtime monitor and community sensor until a credential becomes available. Live verification is currently deliberately deferred because no suitable token is available. Enabling it later requires only adding the repository secret; no code or workflow change is needed.
 
 ## Community watch
 
 Workflow: `.github/workflows/domonap-community-watch.yml`.
 
-It scans selected source files from `svmironov/domonap_intercom`, runs the same marker extractor
-and opens/updates an issue for `MEDIUM`, `HIGH` or `SECURITY` drift.
+It fetches selected source files from `svmironov/domonap_intercom`, extracts protocol markers and runs `contract_diff --partial-observation`.
 
-Community output is advisory. Before adapting the bot, confirm the change with the official APK,
-a safe live observation, or both.
+Community evidence is intentionally partial. Therefore it may report new API-like hosts, headers, endpoints or SignalR events, but it does **not** claim an official capability disappeared merely because that marker is absent from selected community files.
 
-## Promoting a new baseline
+When no actionable `MEDIUM/HIGH/SECURITY` additions remain, a stale community-drift issue is closed automatically.
+
+Community output is advisory. Confirm changes with the official APK, runtime evidence or live canary before modifying production behavior.
+
+## Promoting a new official baseline
 
 When Android version `N` is detected:
 
 1. inspect the `domonap-api-watch-N` artifact;
-2. verify APK acquisition provenance, signer verification, version candidates and extraction
-   coverage;
-3. review every `SECURITY`, `HIGH` and `MEDIUM` finding;
-4. distinguish the bot runtime contract from markers actually proven by static extraction;
-5. compare runtime compatibility state and, when configured, live-canary results;
-6. update implementation/tests only for confirmed changes;
-7. update `contracts/domonap/current.json` to version `N`;
-8. set the strongest verification state justified by the evidence;
-9. run ordinary CI and the forced APK analysis on the pull request;
-10. merge only after both agree.
+2. verify APK acquisition provenance and signer;
+3. review JADX quality/coverage;
+4. review every SECURITY/HIGH/MEDIUM finding;
+5. distinguish runtime contract from statically observed markers;
+6. compare passive runtime compatibility;
+7. require a compatible live canary only when credentials are configured;
+8. update implementation/tests only for confirmed changes;
+9. update `contracts/domonap/current.json`;
+10. choose only the strongest verification state justified by evidence;
+11. run ordinary CI and forced APK analysis;
+12. merge through the normal protected-branch process.
 
-For a new host/origin, do not add it to the authorization allow-list until ownership and TLS
-identity are verified. Existing cross-origin Authorization stripping remains a security invariant.
+For a new host/origin, never add it to the authorization allow-list until ownership and TLS identity are independently verified.
 
-## Current 9850 evidence
+## Current Android 9850 evidence
 
-The baseline for Android `versionCode=9850` was promoted on 2026-08-23 after a real RuStore APK
-analysis. The APK signer matched the fingerprint returned independently by the RuStore backend.
-JADX returned partial-decompilation code `3`, but produced 23,405 source files; 25,700 text files
-were scanned for protocol markers.
+The current baseline is Android `versionCode=9850`, promoted on 2026-08-23.
 
-Confirmed markers include:
+Evidence:
 
-- trusted production API host `api.domonap.ru`;
-- observed but untrusted `dev-api.domonap.ru` and `www.domonap.*` markers;
-- `dom-app`, `dom-platform`, `instanceId` and official-client `device-info` marker;
-- SignalR `/notificationHub`, target `ReceivePush`, and call events
-  `DomofonCalling`, `DomofonCallAnswered`, `DomofonCallEnded`;
-- a static subset of the runtime endpoints plus additional official-client capabilities recorded in
-  `observed_endpoints`.
+- RuStore APK signer SHA-256 matched the fingerprint obtained independently from the TLS-verified RuStore backend;
+- JADX returned partial-decompilation exit code `3`;
+- 23,405 source files were produced;
+- 25,700 text files were scanned.
 
-`device-info` is intentionally not injected into bot requests automatically. It should become a
-runtime requirement only if passive/live evidence demonstrates that the service starts requiring
-it.
+Confirmed markers include trusted production API host `api.domonap.ru`, observed but untrusted `dev-api.domonap.ru` / `www.domonap.*`, `dom-app`, `dom-platform`, `instanceId`, official-client `device-info`, SignalR `/notificationHub`, target `ReceivePush`, and call events `DomofonCalling`, `DomofonCallAnswered`, `DomofonCallEnded`.
+
+`device-info` is not automatically added to bot requests. It should become a runtime requirement only if passive/live evidence demonstrates that the service requires it.
 
 ## Local commands
 
-Static extraction after JADX decompilation:
+Static extraction:
 
 ```bash
 PYTHONPATH=src python -m domonap_bot.tools.apk_extract \
   --jadx-dir /tmp/jadx-out \
   --output /tmp/observed.json
+```
 
+Complete-source diff:
+
+```bash
 PYTHONPATH=src python -m domonap_bot.tools.contract_diff \
   --baseline contracts/domonap/current.json \
   --observed /tmp/observed.json \
@@ -214,17 +190,21 @@ PYTHONPATH=src python -m domonap_bot.tools.contract_diff \
   --markdown-output /tmp/diff.md
 ```
 
-Read-only live probe:
+Partial-source diff:
+
+```bash
+PYTHONPATH=src python -m domonap_bot.tools.contract_diff \
+  --baseline contracts/domonap/current.json \
+  --observed /tmp/community-observed.json \
+  --json-output /tmp/community-diff.json \
+  --markdown-output /tmp/community-diff.md \
+  --partial-observation
+```
+
+Read-only live probe when a credential is available:
 
 ```bash
 DOMONAP_CANARY_ACCESS_TOKEN='...' \
-PYTHONPATH=src python -m domonap_bot.tools.api_probe --output /tmp/canary.json
-```
-
-Release metadata check without forcing APK download:
-
-```bash
-PYTHONPATH=src python -m domonap_bot.tools.release_watch \
-  --contract contracts/domonap/current.json \
-  --report /tmp/release.json
+PYTHONPATH=src python -m domonap_bot.tools.api_probe \
+  --output /tmp/canary.json
 ```

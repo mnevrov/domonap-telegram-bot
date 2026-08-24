@@ -1,7 +1,6 @@
 services:
   bot:
-    image: domonap-telegram-bot:local
-    build: .
+    image: "${DOMONAP_BOT_IMAGE:?Set DOMONAP_BOT_IMAGE to an immutable GHCR release tag}"
     env_file: ".env"
     volumes:
       - "./data:/app/data"
@@ -23,8 +22,7 @@ services:
         max-file: "5"
 
   backup:
-    image: domonap-telegram-bot:local
-    build: .
+    image: "${DOMONAP_BOT_IMAGE:?Set DOMONAP_BOT_IMAGE to an immutable GHCR release tag}"
     command: ["python", "-m", "domonap_bot.backup_daemon"]
     environment:
       STORAGE_PATH: "${STORAGE_PATH:-data/storage.db}"

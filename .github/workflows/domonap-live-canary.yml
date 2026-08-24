@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "43 5 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "contracts/domonap/**"
+      - "src/domonap_bot/domonap/**"
+      - "src/domonap_bot/tools/api_probe.py"
+      - ".github/workflows/domonap-live-canary.yml"
 
 permissions:
   contents: read
@@ -11,11 +17,14 @@ permissions:
 
 jobs:
   live-canary:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -51,7 +60,7 @@ jobs:
           PY
 
       - name: Upload canary report
-        if: always() && steps.result.outputs.overall != 'skipped'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: domonap-live-canary
@@ -59,11 +68,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Open or update degradation issue
-        if: steps.result.outputs.overall == 'degraded' || steps.result.outputs.overall == 'failed'
+      # No suitable long-lived canary credential is currently available. Keep this
+      # explicit in the run, but do not turn an unconfigured optional control into a
+      # false production failure. Once the secret exists, degradation is blocking.
+      - name: Report unconfigured canary
+        if: steps.result.outputs.overall == 'skipped'
+        run: |
+          echo "DOMONAP_CANARY_ACCESS_TOKEN is not configured; live compatibility is not verified."
+          echo "This is intentionally non-blocking until a canary credential is available."
+
+      - name: Open or update degraded-canary issue
+        if: >-
+          steps.result.outputs.overall == 'degraded' ||
+          steps.result.outputs.overall == 'failed'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          OVERALL: ${{ steps.result.outputs.overall }}
         run: |
           set -euo pipefail
           title="[api-canary] Domonap live compatibility degraded"
@@ -73,7 +94,7 @@ jobs:
             --json number \
             --jq '.[0].number // empty')"
           {
-            echo "# Domonap live canary degradation"
+            echo "# Domonap live canary: ${OVERALL}"
             echo
             if [[ -f /tmp/domonap-live-canary.json ]]; then
               echo '```json'
@@ -93,6 +114,26 @@ jobs:
             gh issue edit "$existing" --body-file /tmp/canary-issue.md
           fi
 
-      - name: Fail on real degradation
-        if: steps.result.outputs.overall == 'degraded' || steps.result.outputs.overall == 'failed'
+      - name: Close resolved degraded-canary issue
+        if: steps.result.outputs.overall == 'compatible'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="[api-canary] Domonap live compatibility degraded"
+          existing="$(gh issue list \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue close "$existing" \
+              --comment "Resolved automatically: the latest read-only live canary is compatible."
+          fi
+
+      - name: Fail on active canary degradation
+        if: >-
+          steps.result.outputs.overall == 'degraded' ||
+          steps.result.outputs.overall == 'failed'
         run: exit 1
