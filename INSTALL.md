@@ -172,23 +172,18 @@ docker compose run --rm --no-deps bot \
 
 Version workflow должна совпадать с `pyproject.toml`.
 
+`docker-compose.prod.yml` — самостоятельный production manifest: в нём намеренно нет `build:`, поэтому production host использует только заранее опубликованный immutable image.
+
 Deploy immutable image:
 
 ```bash
 export DOMONAP_BOT_IMAGE=ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0
 
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.prod.yml \
-  pull
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.prod.yml \
-  up -d
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-Rollback выполняется заменой `DOMONAP_BOT_IMAGE` на предыдущий immutable release tag и повторным `pull/up -d`.
+Rollback выполняется заменой `DOMONAP_BOT_IMAGE` на предыдущий immutable release tag и повторным `pull/up -d` с `-f docker-compose.prod.yml`.
 
 ## 11. Обновление из исходников
 
