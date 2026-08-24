@@ -59,7 +59,22 @@ async def test_request_sms_sets_state_and_force_reply() -> None:
     assert isinstance(markup, ForceReply)
 
 
-async def test_invalid_reply_keeps_state_and_does_not_call_api() -> None:
+async def test_failed_new_request_clears_stale_sms_state() -> None:
+    client = MagicMock()
+    client.phone = "+79991234567"
+    client.login = AsyncMock(return_value=False)
+    message = _message()
+    state = _state("stale-request")
+    await state.set_state(AuthStates.waiting_sms_code)
+
+    result = await request_sms_code(message, client, state)
+
+    assert result is False
+    client.login.assert_awaited_once_with("+79991234567")
+    assert await state.get_state() is None
+
+
+async def test_invalid_reply_is_deleted_keeps_state_and_does_not_call_api() -> None:
     client = MagicMock()
     client.confirm_login = AsyncMock()
     message = _message(text="not-a-code")
@@ -70,7 +85,7 @@ async def test_invalid_reply_keeps_state_and_does_not_call_api() -> None:
 
     assert result is False
     client.confirm_login.assert_not_awaited()
-    message.delete.assert_not_awaited()
+    message.delete.assert_awaited_once()
     assert await state.get_state() == AuthStates.waiting_sms_code
     assert isinstance(message.answer.await_args.kwargs["reply_markup"], ForceReply)
 
