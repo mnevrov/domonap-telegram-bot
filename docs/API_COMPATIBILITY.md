@@ -122,7 +122,7 @@ A missing canary secret is explicit but non-blocking. If `DOMONAP_CANARY_ACCESS_
 
 Once a credential is configured, actual live incompatibility remains blocking: `degraded` or probe execution failure opens/updates `[api-canary] Domonap live compatibility degraded` and fails the workflow. A later compatible run closes that issue automatically.
 
-A skipped canary must not be described as live-verified evidence. In this state the project relies on the official APK analysis, passive runtime monitor and community sensor until a credential becomes available.
+A skipped canary must not be described as live-verified evidence. In this state the project relies on the official APK analysis, passive runtime monitor and community sensor until a credential becomes available. Live verification is currently deliberately deferred because no suitable token is available.
 
 ## Community watch
 
