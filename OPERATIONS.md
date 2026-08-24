@@ -96,11 +96,11 @@ Compose uses bounded Docker JSON logs: bot 5 × 10 MiB, backup 3 × 10 MiB. Thir
 
 ## Domonap API compatibility
 
-The integration is not a documented public API. Production maintenance combines passive runtime monitoring, RuStore release watch + signer-verified APK analysis, read-only live canary and community integration watch. See `docs/API_COMPATIBILITY.md`.
+The integration is not a documented public API. Production maintenance combines passive runtime monitoring, RuStore release watch + signer-verified APK analysis, optional read-only live canary and community integration watch. See `docs/API_COMPATIBILITY.md`.
 
 Community sources run in partial-observation mode: new markers can raise findings, but missing markers do not imply removal. This prevents false HIGH removal storms from incomplete source snapshots.
 
-The live canary must use `DOMONAP_CANARY_ACCESS_TOKEN` from a dedicated low-privilege account. Missing credentials now fail the canary and open an issue rather than silently returning `skipped`.
+The live canary uses `DOMONAP_CANARY_ACCESS_TOKEN` from a dedicated low-privilege account when such a credential is available. If the secret is absent, the workflow reports `skipped` and remains non-blocking; static APK analysis, runtime monitoring and community watch continue to provide compatibility evidence. If credentials are later configured, actual canary degradation remains a blocking failure and opens a dedicated issue.
 
 ## Dependency maintenance
 
@@ -137,4 +137,4 @@ For each production release verify health, `/status`, doors, one real door-open 
 
 ## Incident notes
 
-Never publish Telegram bot token, Domonap tokens, SMS codes or `STORAGE_ENCRYPTION_KEY`. Rotate exposed credentials instead of relying on log deletion. Repeated SignalR fallback, watchdog restarts, API contract mismatch or canary failure should be treated as operational signals.
+Never publish Telegram bot token, Domonap tokens, SMS codes or `STORAGE_ENCRYPTION_KEY`. Rotate exposed credentials instead of relying on log deletion. Repeated SignalR fallback, watchdog restarts, API contract mismatch or configured-canary failure should be treated as operational signals.
