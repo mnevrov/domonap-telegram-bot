@@ -41,11 +41,21 @@ def sms_code_reply() -> ForceReply:
     )
 
 
+async def _delete_code_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
 async def request_sms_code(
     message: Message,
     client: DomonapClient,
     state: FSMContext,
 ) -> bool:
+    # A new authorization attempt supersedes any previous pending SMS flow.
+    await state.clear()
+
     phone = client.phone
     if not phone:
         await message.answer("Номер телефона Domonap не настроен.")
@@ -81,6 +91,7 @@ async def submit_sms_code(
 ) -> bool:
     normalized = normalize_sms_code(code)
     if normalized is None:
+        await _delete_code_message(message)
         await message.answer(
             "Код должен состоять только из цифр. Попробуйте ещё раз:",
             reply_markup=sms_code_reply(),
@@ -94,10 +105,7 @@ async def submit_sms_code(
         success = False
         error = exc
     finally:
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _delete_code_message(message)
 
     if success:
         await state.clear()
