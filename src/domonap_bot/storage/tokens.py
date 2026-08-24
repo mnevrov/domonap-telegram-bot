@@ -94,7 +94,9 @@ class TokenStorage:
         try:
             session = AuthSession.model_validate_json(serialized)
         except (ValidationError, ValueError) as exc:
-            raise TokenStorageEncryptionError("Persisted Domonap session payload is invalid") from exc
+            raise TokenStorageEncryptionError(
+                "Persisted Domonap session payload is invalid"
+            ) from exc
 
         if needs_encryption and self._fernet is not None:
             await self.save(session)
