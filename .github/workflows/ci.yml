@@ -43,6 +43,7 @@ jobs:
           docker run --rm --entrypoint python domonap-telegram-bot:ci -c '
           import sys
           import domonap_bot.main
+          import domonap_bot.backup_daemon
           assert sys.version_info[:2] == (3, 12), sys.version
           '
 
@@ -50,3 +51,5 @@ jobs:
         run: |
           touch .env
           docker compose config
+          DOMONAP_BOT_IMAGE=ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0 \
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml config

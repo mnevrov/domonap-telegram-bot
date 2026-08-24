@@ -7,10 +7,10 @@ WORKDIR /app
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ .
+COPY src/ ./
 
-RUN mkdir -p /app/data \
-    && chmod 700 /app/data \
+RUN mkdir -p /app/data /app/backups \
+    && chmod 700 /app/data /app/backups \
     && chown -R appuser:appuser /app
 
 USER appuser

@@ -1,0 +1,8 @@
+services:
+  bot:
+    image: "${DOMONAP_BOT_IMAGE:?Set DOMONAP_BOT_IMAGE to an immutable GHCR release tag}"
+    build: null
+
+  backup:
+    image: "${DOMONAP_BOT_IMAGE:?Set DOMONAP_BOT_IMAGE to an immutable GHCR release tag}"
+    build: null

@@ -33,15 +33,16 @@ def _endpoint_path(value: str) -> str:
 
 
 def compare_contracts(
-    baseline: dict[str, Any], observed: dict[str, Any]
+    baseline: dict[str, Any],
+    observed: dict[str, Any],
+    *,
+    report_missing: bool = True,
 ) -> list[Finding]:
     findings: list[Finding] = []
 
     legacy_hosts = _string_set(baseline.get("hosts"))
     trusted_hosts = _string_set(baseline.get("trusted_hosts")) or legacy_hosts
-    known_observed_hosts = (
-        _string_set(baseline.get("observed_hosts")) or trusted_hosts
-    )
+    known_observed_hosts = _string_set(baseline.get("observed_hosts")) or trusted_hosts
     observed_hosts = _string_set(observed.get("hosts"))
     observed_api_hosts = _string_set(observed.get("api_hosts"))
 
@@ -53,10 +54,11 @@ def compare_contracts(
             else "New non-API Domonap host marker"
         )
         findings.append(Finding(severity, "host", f"{description}: {host}"))
-    for host in sorted(trusted_hosts - observed_hosts):
-        findings.append(
-            Finding("HIGH", "host", f"Trusted API host not found in APK: {host}")
-        )
+    if report_missing:
+        for host in sorted(trusted_hosts - observed_hosts):
+            findings.append(
+                Finding("HIGH", "host", f"Trusted API host not found in APK: {host}")
+            )
 
     expected_headers = (
         _string_set(baseline.get("observed_headers"))
@@ -66,10 +68,11 @@ def compare_contracts(
     for header in sorted(observed_headers - expected_headers):
         severity = "MEDIUM" if header == "device-info" else "LOW"
         findings.append(Finding(severity, "header", f"New client header marker: {header}"))
-    for header in sorted(expected_headers - observed_headers):
-        findings.append(
-            Finding("MEDIUM", "header", f"Expected client header marker not found: {header}")
-        )
+    if report_missing:
+        for header in sorted(expected_headers - observed_headers):
+            findings.append(
+                Finding("MEDIUM", "header", f"Expected client header marker not found: {header}")
+            )
 
     expected_endpoints = (
         _string_set(baseline.get("observed_endpoints"))
@@ -79,8 +82,9 @@ def compare_contracts(
     expected_paths = {_endpoint_path(item) for item in expected_endpoints}
     observed_paths = {_endpoint_path(item) for item in observed_endpoints}
 
-    for path in sorted(expected_paths - observed_paths):
-        findings.append(Finding("HIGH", "endpoint", f"Expected endpoint disappeared: {path}"))
+    if report_missing:
+        for path in sorted(expected_paths - observed_paths):
+            findings.append(Finding("HIGH", "endpoint", f"Expected endpoint disappeared: {path}"))
     for path in sorted(observed_paths - expected_paths):
         findings.append(Finding("LOW", "endpoint", f"New official-app endpoint detected: {path}"))
 
@@ -89,20 +93,23 @@ def compare_contracts(
     if isinstance(baseline_signalr, dict) and isinstance(observed_signalr, dict):
         expected_hub = str(baseline_signalr.get("hub") or "")
         observed_hubs = _string_set(observed_signalr.get("hubs"))
-        if expected_hub and expected_hub not in observed_hubs:
+        if report_missing and expected_hub and expected_hub not in observed_hubs:
             findings.append(Finding("HIGH", "signalr", f"SignalR hub missing: {expected_hub}"))
 
         expected_target = str(baseline_signalr.get("target") or "")
         observed_targets = _string_set(observed_signalr.get("targets"))
-        if expected_target and expected_target not in observed_targets:
+        if report_missing and expected_target and expected_target not in observed_targets:
             findings.append(
                 Finding("HIGH", "signalr", f"SignalR target missing: {expected_target}")
             )
 
         expected_events = _string_set(baseline_signalr.get("events"))
         observed_events = _string_set(observed_signalr.get("events"))
-        for event in sorted(expected_events - observed_events):
-            findings.append(Finding("HIGH", "signalr", f"SignalR event disappeared: {event}"))
+        if report_missing:
+            for event in sorted(expected_events - observed_events):
+                findings.append(
+                    Finding("HIGH", "signalr", f"SignalR event disappeared: {event}")
+                )
         for event in sorted(observed_events - expected_events):
             findings.append(Finding("LOW", "signalr", f"New SignalR event detected: {event}"))
 
@@ -143,6 +150,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--observed", type=Path, required=True)
     parser.add_argument("--json-output", type=Path, required=True)
     parser.add_argument("--markdown-output", type=Path, required=True)
+    parser.add_argument(
+        "--partial-observation",
+        action="store_true",
+        help=(
+            "Treat the observed source as incomplete: report newly observed markers, "
+            "but do not infer removals from absent markers."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -150,7 +165,11 @@ def main() -> int:
     args = parse_args()
     baseline = _load_json(args.baseline)
     observed = _load_json(args.observed)
-    findings = compare_contracts(baseline, observed)
+    findings = compare_contracts(
+        baseline,
+        observed,
+        report_missing=not args.partial_observation,
+    )
     report = {
         "findings": [asdict(item) for item in findings],
         "highest_severity": next(
@@ -161,6 +180,7 @@ def main() -> int:
             ),
             "INFO",
         ),
+        "partial_observation": bool(args.partial_observation),
     }
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     args.json_output.write_text(

@@ -1,120 +1,136 @@
 # Operations runbook
 
-This document covers the operational procedures that protect the bot's persisted state and keep its pinned dependencies maintainable.
+This runbook covers persisted state, automatic backup/restore, health recovery, dependency maintenance, API compatibility monitoring, releases and incident handling.
 
-## Storage layout and secrets
+## Storage and secrets
 
-The default SQLite database is `data/storage.db`. It contains:
+The default SQLite database is `data/storage.db`. It contains runtime allow/admin ACL and Domonap session metadata. Access/refresh tokens and related session fields are encrypted with `STORAGE_ENCRYPTION_KEY`.
 
-- the runtime allow/admin ACL;
-- Domonap session metadata;
-- Domonap access/refresh tokens encrypted with `STORAGE_ENCRYPTION_KEY`.
+The session is stored as one authenticated encrypted record. Refresh-token rotation therefore cannot leave a mixture of independently committed old/new token fields. Legacy per-field storage is migrated automatically on first successful read.
 
-The database file is private (`0600` on POSIX) and its parent directory is created private (`0700`) when the application creates it. Treat database backups as sensitive even though session values are encrypted.
+The SQLite file is private (`0600` on POSIX when possible) and its parent is created private (`0700`). Treat backups as sensitive even though Domonap session values are encrypted.
 
-`STORAGE_ENCRYPTION_KEY` is **not** stored in the database. Keep it in a secret manager or another backup location that is separate from SQLite backups and from the Git repository. A database backup without the matching key cannot restore an encrypted Domonap session.
+`STORAGE_ENCRYPTION_KEY` is not stored in SQLite and is not passed to the backup sidecar. Keep it separately from database backups and the Git repository.
 
-Do not use a copy of the complete `.env` file as the normal database-key backup: it also contains the Telegram bot token and may contain other deployment-specific secrets.
+## Automatic backups
 
-## Consistent SQLite backup
+Docker Compose runs a dedicated `backup` service using the same application image but without `.env` secrets. Defaults: every 6 hours (`BACKUP_INTERVAL_SECONDS=21600`), keep 28 copies (`BACKUP_RETENTION_COUNT=28`) in `/app/backups` on a separate Docker volume.
 
-The built-in backup command uses SQLite's online backup API, validates the resulting database with `PRAGMA integrity_check`, writes through a temporary file and atomically replaces the requested destination.
-
-From a configured virtual environment:
+The service uses SQLite online backup, validates the copy with `PRAGMA integrity_check`, writes through a temporary file and atomically replaces the destination.
 
 ```bash
-mkdir -p backups
-python -m domonap_bot.storage_tools backup \
-  data/storage.db \
-  backups/storage-$(date +%Y%m%d-%H%M%S).db
+docker compose ps backup
+docker compose logs --tail=100 backup
+docker compose exec backup sh -c 'ls -lh /app/backups'
 ```
 
-The bot may remain running during a backup. Copy the resulting backup to the actual backup destination after the command succeeds.
+Automatic local backup is not off-site disaster recovery. Periodically copy the backup volume to a different host/storage and keep the matching `STORAGE_ENCRYPTION_KEY` in another protected location.
 
-For every backup set, verify that you also have access to the corresponding `STORAGE_ENCRYPTION_KEY`. Store the key separately from the database archive.
+## Restore drill
 
-## Restore
-
-A restore replaces the destination database atomically after verifying the backup. **Stop the bot before restoring.**
+The repository test suite performs a backup/restore round-trip in CI. On a deployed host also run a non-destructive drill periodically:
 
 ```bash
-docker compose down
+latest="$(docker compose exec -T backup sh -c 'ls -1t /app/backups/storage-*.db | head -n1')"
 
-# Optional but strongly recommended: preserve the current database first.
-python -m domonap_bot.storage_tools backup \
-  data/storage.db \
-  backups/pre-restore-$(date +%Y%m%d-%H%M%S).db
-
-python -m domonap_bot.storage_tools restore \
-  backups/storage-YYYYMMDD-HHMMSS.db \
-  data/storage.db
+docker compose run --rm --no-deps bot \
+  python -m domonap_bot.storage_tools restore \
+  "$latest" /tmp/restore-drill.db
 ```
 
-Restore the matching `STORAGE_ENCRYPTION_KEY` in the deployment environment before starting the bot again, then:
+The command verifies both source backup and restored DB with SQLite integrity checks.
+
+## Production restore
+
+Stop both services:
 
 ```bash
-docker compose up -d --build
-docker compose ps
-docker compose logs --tail=100 bot
+docker compose stop bot backup
 ```
 
-After startup, verify `/status`, the visible door list and the effective admin/user ACL. A wrong encryption key causes startup to fail closed instead of silently discarding the saved session.
+Inspect backups:
+
+```bash
+docker compose run --rm --no-deps bot sh -c 'ls -1t /app/backups/storage-*.db | head'
+```
+
+Restore:
+
+```bash
+docker compose run --rm --no-deps bot \
+  python -m domonap_bot.storage_tools restore \
+  /app/backups/storage-YYYYMMDD-HHMMSS.db \
+  /app/data/storage.db
+```
+
+Restore the matching `STORAGE_ENCRYPTION_KEY`, then `docker compose up -d` and verify `/status`, doors and effective ACL/admin roles.
 
 ## Storage encryption key rotation
 
-The current storage format intentionally does not guess or silently re-encrypt data with an unknown key. To rotate the key without retaining ciphertext under the old key:
+Execute `/logout`, stop bot + backup, generate and configure a new Fernet key, restart, authenticate through `/auth`, verify `/status`, then create a fresh backup. Preserve the previous key only while old backups must remain recoverable.
 
-1. while the old key is still configured and the bot is running, execute `/logout` to clear the persisted Domonap session;
-2. stop the bot;
-3. generate a new Fernet key;
-4. replace `STORAGE_ENCRYPTION_KEY` in the deployment secret store;
-5. start the bot and authenticate to Domonap again with `/auth` and `/code`;
-6. create a fresh database backup and separately back up the new encryption key.
+## Session invalidation reliability
 
-Generate a key with:
+When Domonap definitively rejects a refresh token, the client emits an empty session transition. The runtime binds that transition to persistent storage cleanup. Pending cleanup tasks are drained during graceful shutdown.
 
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
+The authoritative session record is deleted last after legacy keys, so interrupted cleanup cannot resurrect an older token set after the atomic record is gone.
 
-If the old key is lost before the session is cleared, do not overwrite the only database backup. Preserve the database and key material you still have before attempting recovery.
+## Health and automatic recovery
 
-## Deployment checks
+The container healthcheck is based on application heartbeat rather than PID existence. Heartbeat is emitted only while the asyncio loop progresses and the call watcher task remains alive when enabled.
 
-The container runs as an unprivileged user with a read-only root filesystem, dropped Linux capabilities and `no-new-privileges`. The writable locations are the persistent `/app/data` bind mount and the bounded `/tmp` tmpfs.
-
-Useful checks after a deployment:
+A daemon watchdog thread monitors heartbeat. Because Docker Compose does not restart a running process merely for `unhealthy`, the watchdog converts stale heartbeat into process exit and `restart: unless-stopped` starts a clean process.
 
 ```bash
-docker compose config
-docker compose up -d --build
 docker compose ps
-docker compose logs --tail=100 bot
+docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q bot)"
 ```
 
-The Docker health check is based on the application's asyncio heartbeat rather than process existence alone. An unhealthy container therefore indicates that the event loop has stopped advancing or the heartbeat is missing/stale.
+Repeated watchdog restarts are an incident and should be investigated.
+
+## Logging
+
+Compose uses bounded Docker JSON logs: bot 5 × 10 MiB, backup 3 × 10 MiB. Third-party HTTP/Telegram/SQLite loggers stay at INFO or higher even when application `LOG_LEVEL=DEBUG`.
+
+## Domonap API compatibility
+
+The integration is not a documented public API. Production maintenance combines passive runtime monitoring, RuStore release watch + signer-verified APK analysis, read-only live canary and community integration watch. See `docs/API_COMPATIBILITY.md`.
+
+Community sources run in partial-observation mode: new markers can raise findings, but missing markers do not imply removal. This prevents false HIGH removal storms from incomplete source snapshots.
+
+The live canary must use `DOMONAP_CANARY_ACCESS_TOKEN` from a dedicated low-privilege account. Missing credentials now fail the canary and open an issue rather than silently returning `skipped`.
 
 ## Dependency maintenance
 
-Runtime and development dependencies are resolved through `constraints.txt`; the Docker base image is pinned by digest. Dependabot checks Python, GitHub Actions and Docker weekly and opens normal pull requests. It does **not** auto-merge updates.
+Runtime/development versions are resolved through `constraints.txt`; the Docker base is digest-pinned. Dependabot checks Python, GitHub Actions and Docker weekly. Changes must pass Ruff, strict mypy, pytest, `pip-audit`, Docker build/runtime smoke, Compose config and full-history secret scan.
 
-Accept dependency/update PRs only after the same gates used for normal code changes are green:
+## Release lifecycle
 
-- Ruff;
-- strict mypy;
-- pytest;
-- `pip-audit` for runtime dependencies;
-- Docker image build;
-- Docker Compose validation;
-- full-history secret scan;
-- automated/reviewer feedback resolved.
+`pyproject.toml` is the source of application version. Production releases use `.github/workflows/release.yml` from `master`.
 
-For a manual dependency update, change the direct dependency requirement only when needed, deliberately update the exact resolved versions in `constraints.txt`, and require a complete CI run plus Docker build before merging. Do not remove exact constraints merely to make a dependency resolver succeed.
+The workflow validates the requested version, reruns quality/security gates, builds the production image, publishes immutable GHCR tags `vX.Y.Z` and `sha-<commit>`, and creates a GitHub Release.
 
-For a Docker base-image update, retain digest pinning. Review the new digest/base tag combination through a PR and require the full Docker/Compose validation before merge.
+Production deployment:
+
+```bash
+export DOMONAP_BOT_IMAGE=ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Rollback by selecting the previous immutable tag and repeating the commands. Do not use `latest` as the rollback contract.
+
+## Repository governance
+
+`master` must be protected by a GitHub branch rule/ruleset requiring PRs, CI, Secret Scan, resolved review conversations and blocked force-push/delete with narrow bypass.
+
+Until that repository setting is enabled, `.github/workflows/master-policy.yml` is a detective fallback: each push to `master` checks association with a PR and opens a policy incident for direct push. It cannot prevent the push; issue #49 remains the authoritative settings task.
+
+## Post-deploy smoke / soak
+
+For each production release verify health, `/status`, doors, one real door-open action, one incoming SignalR call, restart/session+ACL recovery, a generated backup and a restore drill. For a major integration change observe the release for 24–72 hours before treating rollout as fully soaked.
 
 ## Incident notes
 
-Never paste Telegram tokens, Domonap access/refresh tokens, SMS confirmation codes or `STORAGE_ENCRYPTION_KEY` into issues, CI logs or troubleshooting screenshots. If a credential is exposed, rotate/revoke it rather than relying on log deletion alone.
-
-When investigating notification failures, remember that SignalR is primary and call-log polling is the fallback. A transient SignalR failure is expected to switch to bounded polling before reconnecting; repeated failures should be investigated from sanitized application logs without enabling dependency-level DEBUG logging.
+Never publish Telegram bot token, Domonap tokens, SMS codes or `STORAGE_ENCRYPTION_KEY`. Rotate exposed credentials instead of relying on log deletion. Repeated SignalR fallback, watchdog restarts, API contract mismatch or canary failure should be treated as operational signals.

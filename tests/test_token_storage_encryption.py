@@ -5,13 +5,14 @@ from domonap_bot.storage.tokens import (
     KEY_ACCESS_TOKEN,
     KEY_PHONE,
     KEY_REFRESH_TOKEN,
+    KEY_SESSION,
     TokenStorage,
     TokenStorageEncryptionError,
 )
 from tests.test_client import FakeStorage
 
 
-async def test_session_values_are_encrypted_at_rest() -> None:
+async def test_session_is_encrypted_as_one_atomic_record() -> None:
     storage = FakeStorage()
     key = Fernet.generate_key().decode()
     tokens = TokenStorage(storage, encryption_key=key)
@@ -26,9 +27,8 @@ async def test_session_values_are_encrypted_at_rest() -> None:
 
     await tokens.save(session)
 
-    assert storage._data[KEY_ACCESS_TOKEN].startswith("fernet:v1:")
-    assert storage._data[KEY_REFRESH_TOKEN].startswith("fernet:v1:")
-    assert storage._data[KEY_PHONE].startswith("fernet:v1:")
+    assert set(storage._data) == {KEY_SESSION}
+    assert storage._data[KEY_SESSION].startswith("fernet:v1:")
     serialized = "\n".join(storage._data.values())
     assert "access-secret-marker" not in serialized
     assert "refresh-secret-marker" not in serialized
@@ -36,7 +36,7 @@ async def test_session_values_are_encrypted_at_rest() -> None:
     assert await tokens.load_full() == session
 
 
-async def test_plaintext_session_is_migrated_on_load() -> None:
+async def test_legacy_plaintext_session_is_migrated_to_atomic_record() -> None:
     storage = FakeStorage()
     storage._data[KEY_ACCESS_TOKEN] = "legacy-access"
     storage._data[KEY_REFRESH_TOKEN] = "legacy-refresh"
@@ -49,10 +49,9 @@ async def test_plaintext_session_is_migrated_on_load() -> None:
     assert session.access_token == "legacy-access"
     assert session.refresh_token == "legacy-refresh"
     assert session.phone == "+79991234567"
-    assert storage._data[KEY_ACCESS_TOKEN].startswith("fernet:v1:")
-    assert storage._data[KEY_REFRESH_TOKEN].startswith("fernet:v1:")
-    assert storage._data[KEY_PHONE].startswith("fernet:v1:")
-    assert "legacy-access" not in storage._data[KEY_ACCESS_TOKEN]
+    assert set(storage._data) == {KEY_SESSION}
+    assert storage._data[KEY_SESSION].startswith("fernet:v1:")
+    assert "legacy-access" not in storage._data[KEY_SESSION]
 
 
 async def test_wrong_key_fails_closed() -> None:
@@ -83,20 +82,37 @@ async def test_encrypted_session_requires_key() -> None:
         raise AssertionError("encrypted session must not be readable without a key")
 
 
-async def test_ciphertext_is_bound_to_storage_field() -> None:
+async def test_ciphertext_is_bound_to_atomic_session_key() -> None:
     storage = FakeStorage()
     tokens = TokenStorage(storage, encryption_key=Fernet.generate_key().decode())
     await tokens.save(
         AuthSession(access_token="access-secret", refresh_token="refresh-secret")
     )
-    storage._data[KEY_ACCESS_TOKEN], storage._data[KEY_REFRESH_TOKEN] = (
-        storage._data[KEY_REFRESH_TOKEN],
-        storage._data[KEY_ACCESS_TOKEN],
-    )
+
+    storage._data[KEY_ACCESS_TOKEN] = storage._data.pop(KEY_SESSION)
 
     try:
         await tokens.load_full()
     except TokenStorageEncryptionError:
         pass
     else:
-        raise AssertionError("ciphertext moved between fields must be rejected")
+        raise AssertionError("ciphertext moved to another storage key must be rejected")
+
+
+async def test_clear_deletes_legacy_before_authoritative_record() -> None:
+    operations: list[str] = []
+
+    class RecordingStorage(FakeStorage):
+        async def delete(self, key: str) -> None:
+            operations.append(key)
+            await super().delete(key)
+
+    storage = RecordingStorage()
+    tokens = TokenStorage(storage, encryption_key=Fernet.generate_key().decode())
+    await tokens.save(AuthSession(access_token="access-secret"))
+    storage._data[KEY_ACCESS_TOKEN] = "stale-legacy"
+
+    await tokens.clear()
+
+    assert operations[-1] == KEY_SESSION
+    assert storage._data == {}

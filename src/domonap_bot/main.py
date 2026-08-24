@@ -7,7 +7,12 @@ from aiogram import Bot
 from domonap_bot.config import Settings
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.compatibility import RuntimeCompatibilityMonitor
-from domonap_bot.health import clear_heartbeat, run_heartbeat
+from domonap_bot.domonap.models import AuthSession
+from domonap_bot.health import (
+    HeartbeatWatchdog,
+    clear_heartbeat,
+    run_heartbeat,
+)
 from domonap_bot.logging_config import setup_logging
 from domonap_bot.storage.sqlite import SqliteStorage
 from domonap_bot.storage.tokens import TokenStorage, TokenStorageEncryptionError
@@ -41,6 +46,51 @@ async def _cancel_task(task: asyncio.Task[None] | None) -> None:
         pass
 
 
+def _bind_session_invalidation_persistence(
+    client: DomonapClient,
+    token_storage: TokenStorage,
+    pending_tasks: set[asyncio.Task[None]],
+) -> None:
+    """Persist terminal session invalidation without widening the client API.
+
+    Successful login/refresh paths already save the complete session before invoking
+    ``token_update_callback``. The callback is therefore only responsible for the
+    empty-session transition emitted by ``DomonapClient._invalidate_refresh``.
+    """
+
+    def on_token_update(session: AuthSession) -> None:
+        if session.access_token or session.refresh_token:
+            return
+
+        task = asyncio.create_task(token_storage.clear())
+        pending_tasks.add(task)
+
+        def on_done(done: asyncio.Task[None]) -> None:
+            pending_tasks.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                logger.error(
+                    "Failed to clear invalidated Domonap session from storage: %s",
+                    error,
+                )
+
+        task.add_done_callback(on_done)
+
+    client.token_update_callback = on_token_update
+
+
+async def _drain_persistence_tasks(tasks: set[asyncio.Task[None]]) -> None:
+    if not tasks:
+        return
+    try:
+        async with asyncio.timeout(_SHUTDOWN_TIMEOUT):
+            await asyncio.gather(*tuple(tasks), return_exceptions=True)
+    except TimeoutError:
+        logger.error("Timed out while persisting terminal Domonap session state")
+
+
 async def main() -> None:
     clear_heartbeat()
 
@@ -71,7 +121,9 @@ async def main() -> None:
     bot: Bot | None = None
     watcher: CallWatcher | None = None
     heartbeat_task: asyncio.Task[None] | None = None
+    watchdog: HeartbeatWatchdog | None = None
     compatibility_monitor: RuntimeCompatibilityMonitor | None = None
+    persistence_tasks: set[asyncio.Task[None]] = set()
 
     try:
         await storage.initialize()
@@ -87,6 +139,8 @@ async def main() -> None:
             phone=settings.domonap_phone,
             register_device_token=settings.domonap_register_device_token,
         )
+        _bind_session_invalidation_persistence(client, token_storage, persistence_tasks)
+
         compatibility_monitor = RuntimeCompatibilityMonitor()
         compatibility_monitor.attach(client._http)
         logger.info(
@@ -111,11 +165,22 @@ async def main() -> None:
 
         watcher = CallWatcher(client, bot, settings, access=access)
         await watcher.start()
-        heartbeat_task = asyncio.create_task(run_heartbeat())
+
+        def runtime_is_healthy() -> bool:
+            if not settings.call_watcher_enabled:
+                return True
+            task = watcher._task
+            return task is not None and not task.done()
+
+        heartbeat_task = asyncio.create_task(run_heartbeat(healthy=runtime_is_healthy))
+        watchdog = HeartbeatWatchdog()
+        watchdog.start()
 
         logger.info("Starting bot polling")
         await dp.start_polling(bot)
     finally:
+        if watchdog is not None:
+            watchdog.stop()
         await _cancel_task(heartbeat_task)
         clear_heartbeat()
         if watcher is not None:
@@ -124,6 +189,7 @@ async def main() -> None:
             await _bounded_close("Telegram bot session", bot.session.close)
         if client is not None:
             await _bounded_close("Domonap client", client.close)
+        await _drain_persistence_tasks(persistence_tasks)
         await _bounded_close("storage", storage.close)
 
 

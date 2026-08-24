@@ -1,163 +1,219 @@
-# Инструкция: установка, запуск и использование Domonap Telegram Bot
+# Установка и запуск Domonap Telegram Bot
 
-Бот управляет домофоном Domonap через Telegram — открывает двери, показывает список домофонов и присылает уведомления о входящих звонках. Работает автономно, без Home Assistant.
+Бот управляет домофоном Domonap через Telegram: показывает двери, открывает их, ведёт журнал звонков и присылает интерактивные уведомления о входящих вызовах.
+
+Рекомендуемый production-вариант — Docker Compose.
 
 ## 1. Требования
 
-- Python **3.12+** для запуска без Docker;
-- Docker и Docker Compose для рекомендуемого контейнерного запуска;
-- токен Telegram-бота от [@BotFather](https://t.me/BotFather);
-- номер телефона, привязанный к аккаунту Domonap;
-- Telegram user ID хотя бы одного разрешённого пользователя.
+- Docker Engine и Docker Compose v2;
+- Telegram bot token от `@BotFather`;
+- номер телефона аккаунта Domonap;
+- Telegram user ID хотя бы одного разрешённого пользователя;
+- отдельный Fernet-ключ для шифрования сохранённой Domonap-сессии.
+
+Для запуска без Docker нужен Python 3.12+.
 
 ## 2. Получение кода
 
 ```bash
 git clone <repo-url> domonap-telegram-bot
 cd domonap-telegram-bot
+cp .env.example .env
 ```
 
 ## 3. Настройка `.env`
 
+| Переменная | Назначение |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | **Обязательно.** Токен Telegram-бота |
+| `ALLOWED_TELEGRAM_USER_IDS` | **Обязательно.** Bootstrap allow-list через запятую |
+| `ADMIN_TELEGRAM_USER_IDS` | Администраторы; каждый должен также входить в allow-list |
+| `DOMONAP_PHONE` | Номер Domonap в международном формате |
+| `DOMONAP_REGISTER_DEVICE_TOKEN` | `false` по умолчанию, чтобы не перехватывать push-маршрут официального приложения |
+| `STORAGE_PATH` | SQLite; для Docker рекомендуется оставить `data/storage.db` |
+| `STORAGE_ENCRYPTION_KEY` | **Обязательно.** Fernet-ключ для шифрования Domonap-сессии |
+| `LOG_LEVEL` | `INFO` по умолчанию |
+| `CALL_WATCHER_ENABLED` | `true` по умолчанию |
+| `BACKUP_INTERVAL_SECONDS` | Интервал автоматических backup; по умолчанию 21600 (6 часов) |
+| `BACKUP_RETENTION_COUNT` | Число сохраняемых backup; по умолчанию 28 |
+
+Создайте encryption key один раз:
+
 ```bash
-cp .env.example .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Откройте `.env` и заполните переменные:
+Сохраните его в `STORAGE_ENCRYPTION_KEY`, но **не** храните вместе с backup SQLite и не коммитьте `.env`.
 
-| Переменная | Что указать |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | **Обязательно.** Токен, выданный @BotFather |
-| `ALLOWED_TELEGRAM_USER_IDS` | **Обязательно.** Telegram user ID разрешённых пользователей через запятую |
-| `ADMIN_TELEGRAM_USER_IDS` | Telegram user ID администраторов; каждый admin обязан также быть разрешённым пользователем |
-| `DOMONAP_PHONE` | Номер телефона аккаунта Domonap в международном формате |
-| `DOMONAP_REGISTER_DEVICE_TOKEN` | `false` по умолчанию: не вызывать `UpdateDeviceToken` и не перехватывать push-маршрут официального приложения; `true` — явно зарегистрировать deviceToken бота |
-| `STORAGE_PATH` | Путь к SQLite, по умолчанию `data/storage.db` |
-| `LOG_LEVEL` | `INFO` по умолчанию, `DEBUG` для отладки |
-| `CALL_WATCHER_ENABLED` | `true`, чтобы получать уведомления о входящих звонках |
-
-⚠️ **Доступ работает fail-closed.** Если `ALLOWED_TELEGRAM_USER_IDS` пуст, приложение **откажется запускаться**. Пустой список никогда не означает публичный доступ.
-
-Администратор должен одновременно входить в effective allow-list. Пользователи и права, добавленные через admin UI, сохраняются в SQLite и восстанавливаются при следующем запуске.
-
-Для совместной работы с официальным приложением рекомендуется оставить `DOMONAP_REGISTER_DEVICE_TOKEN=false`. При SMS-авторизации `deviceToken` по-прежнему передаётся в `ConfirmAuthorization`, но отдельный запрос `UpdateDeviceToken` не выполняется. Real-time уведомления бота при этом могут приходить через SignalR, не меняя push-маршрут мобильного приложения.
-
-Пример `.env`:
+Пример:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456789:AAExampleTokenFromBotFather
-ALLOWED_TELEGRAM_USER_IDS=111111111,222222222
+ALLOWED_TELEGRAM_USER_IDS=111111111
 ADMIN_TELEGRAM_USER_IDS=111111111
 DOMONAP_PHONE=+79991234567
 DOMONAP_REGISTER_DEVICE_TOKEN=false
 STORAGE_PATH=data/storage.db
+STORAGE_ENCRYPTION_KEY=<FERNET_KEY>
 LOG_LEVEL=INFO
 CALL_WATCHER_ENABLED=true
+BACKUP_INTERVAL_SECONDS=21600
+BACKUP_RETENTION_COUNT=28
 ```
 
-## 4. Запуск
+Приложение работает fail-closed: пустой `ALLOWED_TELEGRAM_USER_IDS` или отсутствующий `STORAGE_ENCRYPTION_KEY` останавливают startup.
 
-### Вариант A — Docker
+## 4. Первый запуск
 
 ```bash
-docker compose up --build -d
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 bot
+docker compose logs --tail=100 backup
 ```
 
-Проверить работу:
+Compose запускает два процесса:
+
+- `bot` — основной Telegram/Domonap runtime;
+- `backup` — отдельный непривилегированный процесс, который делает consistent SQLite backup каждые 6 часов и хранит последние 28 копий.
+
+Backup лежат в отдельном Docker volume `backups`. Контейнер backup не получает Telegram token, Domonap credentials или `STORAGE_ENCRYPTION_KEY`.
+
+Проверить список backup:
 
 ```bash
-docker compose logs -f
+docker compose exec backup sh -c 'ls -lh /app/backups'
 ```
 
-Остановить:
+## 5. Авторизация Domonap
 
-```bash
-docker compose down
-```
+Авторизацию может запускать только администратор.
 
-SQLite и токены сохраняются в `./data`, которая смонтирована в контейнер как volume.
+1. Отправьте `/start`.
+2. Отправьте `/auth` или выберите **Управление → Подключить Domonap**.
+3. Бот запросит SMS и покажет ForceReply.
+4. Ответьте на это сообщение числовым SMS-кодом.
+5. Сообщение с кодом будет удалено, если Telegram разрешит удаление.
+6. Проверьте `/status`.
 
-### Вариант B — без Docker
+`/code <код>` сохранён только как скрытый compatibility fallback. `/cancel` отменяет незавершённый SMS-flow.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m domonap_bot.main
-```
+Токены автоматически сохраняются в SQLite как один зашифрованный atomic session record. При окончательном отклонении refresh-token сохранённая сессия очищается, чтобы не восстанавливаться после рестарта.
 
-Для остановки — `Ctrl+C`. Для постоянной работы рекомендуется Docker или systemd.
+## 6. Основные команды
 
-## 5. Первая авторизация в Domonap
-
-Авторизация происходит через SMS-код и доступна только действующему администратору.
-
-1. Откройте диалог с ботом и отправьте `/start`.
-2. Отправьте `/auth` — на `DOMONAP_PHONE` придёт SMS-код.
-3. Отправьте `/code <код>`, например `/code 4821`. Бот пытается удалить сообщение с кодом после обработки.
-4. Отправьте `/status`, чтобы проверить соединение. Номер телефона в статусе отображается в маскированном виде.
-
-Токены сохраняются в SQLite и автоматически обновляются. `/logout` очищает сохранённую Domonap-сессию.
-
-## 6. Команды
-
-| Команда | Кто может использовать | Что делает |
+| Команда | Доступ | Назначение |
 |---|---|---|
-| `/start` | разрешённые | Главное меню |
-| `/status` | разрешённые | Статус авторизации без полного номера телефона |
-| `/doors` | разрешённые | Список доступных дверей |
-| `/open` | разрешённые | Выбор и открытие двери |
-| `/auth` | admin | Запрос SMS-кода |
-| `/code <code>` | admin | Подтверждение SMS-кода |
-| `/logout` | admin | Сброс Domonap-сессии |
+| `/start` | allowed | Главное меню |
+| `/open` | allowed | Быстро открыть дверь |
+| `/doors` | allowed | Список дверей |
+| `/status` | allowed | Проверить Domonap-сессию |
+| `/help` | allowed | Справка |
+| `/auth` | admin | Начать SMS-авторизацию |
+| `/logout` | admin | Завершить Domonap-сессию |
+| `/cancel` | admin | Отменить ожидаемый SMS-код |
+| `/code <code>` | admin | Скрытый fallback |
 
-Последнего действующего администратора удалить через admin UI нельзя.
+Новых пользователей рекомендуется добавлять через одноразовые invite-ссылки в разделе **Управление → Пользователи**. Последнего администратора удалить или понизить нельзя.
 
-## 7. Уведомления о входящих звонках
+## 7. Входящие звонки
 
-Если `CALL_WATCHER_ENABLED=true`, watcher отправляет уведомления текущим разрешённым пользователям.
+При `CALL_WATCHER_ENABLED=true` основной канал — Domonap SignalR. При сбое бот временно переходит на polling call log и затем повторяет SignalR connection.
 
-Основной механизм:
+Live-карточка может содержать:
 
-1. real-time SignalR WebSocket к Domonap Notification Hub;
-2. при завершении или сбое SignalR — временный fallback на polling журнала звонков;
-3. затем новая попытка SignalR;
-4. call ID дедуплицируются ограниченным упорядоченным кэшем;
-5. карта `doorId → дверь` периодически обновляется и принудительно перечитывается при неизвестном `doorId`.
-
-Уведомление может содержать:
-
-- название/адрес двери;
-- время звонка;
+- дверь/адрес и время;
 - фото/preview;
-- кнопку «Открыть»;
-- кнопку «Видео», если URL доступен.
+- **Открыть**;
+- **Ответить / Сбросить** для активного звонка;
+- **Камера** для безопасного HTTP(S)-URL.
 
-Отключить watcher:
+Доставка Telegram-уведомлений имеет bounded retry, а call ID дедуплицируются ограниченным кэшем.
 
-```env
-CALL_WATCHER_ENABLED=false
+## 8. Health и automatic recovery
+
+Docker healthcheck проверяет heartbeat asyncio runtime. Heartbeat дополнительно зависит от фонового call watcher.
+
+Внутри процесса работает отдельный watchdog thread. Если event loop завис или критическая watcher-задача завершилась, heartbeat пропадает, watchdog завершает process и `restart: unless-stopped` поднимает контейнер заново.
+
+```bash
+docker compose ps
+docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q bot)"
 ```
 
-## 8. Обновление и обслуживание
+## 9. Restore drill
+
+Периодически проверяйте, что backup реально восстанавливается:
+
+```bash
+latest="$(docker compose exec -T backup sh -c 'ls -1t /app/backups/storage-*.db | head -n1')"
+
+docker compose run --rm --no-deps bot \
+  python -m domonap_bot.storage_tools restore \
+  "$latest" /tmp/restore-drill.db
+```
+
+Команда выполняет `PRAGMA integrity_check` до и после восстановления. Это проверочный restore в `/tmp`; production database не меняется.
+
+Полная процедура восстановления описана в `OPERATIONS.md`.
+
+## 10. Production image и rollback
+
+Для production-релизов используется `.github/workflows/release.yml`. Workflow:
+
+1. повторяет Ruff, strict mypy, pytest и `pip-audit`;
+2. выполняет full-history secret scan;
+3. строит image;
+4. публикует immutable tags в GHCR:
+   - `vX.Y.Z`;
+   - `sha-<commit>`;
+5. создаёт GitHub Release.
+
+Version workflow должна совпадать с `pyproject.toml`.
+
+Deploy immutable image:
+
+```bash
+export DOMONAP_BOT_IMAGE=ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  pull
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  up -d
+```
+
+Rollback выполняется заменой `DOMONAP_BOT_IMAGE` на предыдущий immutable release tag и повторным `pull/up -d`.
+
+## 11. Обновление из исходников
+
+Для dev/local deployment:
 
 ```bash
 git pull
-docker compose up --build -d
+docker compose up -d --build
+docker compose ps
 ```
 
-Логи:
+Для production предпочтительнее immutable GHCR image из release workflow, а не сборка текущего checkout непосредственно на сервере.
+
+## 12. Диагностика
 
 ```bash
-docker compose logs -f --tail=100
+docker compose ps
+docker compose logs --tail=200 bot
+docker compose logs --tail=100 backup
 ```
 
-Для повторной авторизации выполните `/logout`, затем `/auth` и `/code <code>`.
+Если `/status` сообщает об истёкшей сессии — выполните новую `/auth`.
 
-## 9. Частые проблемы
+Если звонки не приходят — проверьте SignalR/fallback записи в логах и состояние healthcheck.
 
-- **Бот не запускается** — проверьте `TELEGRAM_BOT_TOKEN` и убедитесь, что `ALLOWED_TELEGRAM_USER_IDS` не пуст.
-- **«Access denied»** — ваш Telegram ID отсутствует в effective allow-list.
-- **Админ-команды недоступны** — admin ID должен одновременно входить в allow-list.
-- **Не приходят звонки** — проверьте `CALL_WATCHER_ENABLED=true`, авторизацию и логи SignalR/polling.
-- **`/open` не показывает двери** — проверьте `/status` и действительность Domonap-сессии.
+Если backup не создаются — проверьте `backup` service и доступность `/app/data/storage.db`.
+
+Не публикуйте в issues или логах Telegram token, Domonap tokens, SMS-коды и `STORAGE_ENCRYPTION_KEY`.
