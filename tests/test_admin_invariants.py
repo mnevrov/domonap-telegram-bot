@@ -2,6 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram import Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message, User
 from pydantic import ValidationError
 
@@ -71,11 +73,12 @@ async def test_configured_admin_is_active_when_allowed() -> None:
         }
         message = _message(1)
         message.text = "/auth"
+        state = FSMContext(storage=MemoryStorage(), key="configured-admin")
 
-        await handlers["cmd_auth"](message)
+        await handlers["cmd_auth"](message, state)
 
         message.answer.assert_awaited_once_with(
-            "No phone number configured. Set DOMONAP_PHONE in .env"
+            "Номер телефона Domonap не настроен."
         )
     finally:
         await bot.session.close()

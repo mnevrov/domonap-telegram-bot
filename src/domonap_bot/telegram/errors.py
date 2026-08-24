@@ -9,9 +9,9 @@ from domonap_bot.domonap.exceptions import (
 
 def describe_error(exc: DomonapError) -> str:
     if isinstance(exc, (TokenExpiredError, SessionExpiredError)):
-        return "Session expired. Re-authentication required."
+        return "Сессия истекла. Подключите Domonap заново."
     if isinstance(exc, NetworkError):
-        return "Network unavailable. Please try again later."
+        return "Сеть недоступна. Повторите позже."
     if isinstance(exc, ApiError):
-        return "Domonap API error. Please try again later."
-    return "Domonap API error. Please try again later."
+        return "Ошибка Domonap API. Повторите позже."
+    return "Ошибка Domonap API. Повторите позже."
