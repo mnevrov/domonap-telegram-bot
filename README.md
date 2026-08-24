@@ -81,56 +81,73 @@ Store that value in `STORAGE_ENCRYPTION_KEY`. Keep the key outside the repositor
 
 | Command | Access | Description |
 |---|---|---|
-| `/start` | allowed | Welcome menu with inline keyboard: Doors, Calls, Admin (if admin) |
-| `/status` | allowed | Authentication status; phone number is masked |
-| `/doors` | allowed | List available doors |
+| `/start` | allowed | Open the main menu |
 | `/open` | allowed | Open a door; a single door auto-opens, multiple doors show a selection keyboard |
-| `/auth` | admin | Request SMS code from Domonap |
-| `/code <code>` | admin | Confirm SMS code and save tokens |
-| `/logout` | admin | Clear saved tokens |
+| `/doors` | allowed | Show available doors with direct open actions |
+| `/status` | allowed | Show Domonap connection status; the phone number is masked |
+| `/help` | allowed | Show user commands and, for admins, contextual maintenance commands |
+| `/auth` | admin | Start SMS authorization and request the code with Telegram ForceReply |
+| `/logout` | admin | Clear the saved Domonap session |
+| `/code <code>` | admin | Hidden compatibility fallback for submitting an SMS code |
+| `/cancel` | admin | Cancel a pending SMS authorization reply flow |
+
+The Telegram private-chat command menu intentionally exposes only `/start`, `/open`, `/doors`, `/status`, and `/help`. Admin maintenance commands stay out of the public command menu.
 
 ## Navigation
 
-The bot uses inline keyboards for all interactions (no complex menu states).
+The main UI uses inline keyboards. SMS authorization is the only temporary stateful interaction: while waiting for a code, the bot uses Telegram ForceReply and a short-lived FSM state.
 
 ### Main menu (`/start`)
 
-- **🚪 Doors** → paginated door list
-- **📞 Calls** → call log with filters (All/Missed)
-- **⚙️ Admin** → admin panel (admins only)
+- **🔓 Открыть дверь** → paginated door list with direct open actions
+- **📞 Звонки** → call log with `Все / Пропущенные` filters
+- **⚙️ Управление** → admin panel (admins only)
+
+The home screen is rendered from local auth/admin state and does not call Domonap merely to build the menu.
 
 ### Doors
 
-- **Door list** — tap a door to see details
-- **Door detail** — shows door info:
-  - **🔓 Open** — opens the door (cooldown-limited)
-  - **📹 Video** — opens video stream URL (if available)
+- The door list is paginated when necessary.
+- Tapping **🔓 <door>** opens that door directly; no intermediate confirmation/detail screen is required.
+- If a validated camera URL is available, a **📹** button is shown next to the door.
+- After an open attempt, navigation returns to the previous door page rather than losing list position.
+- `/open` uses the fast command flow: one configured door is opened immediately; multiple doors show a selection keyboard.
 
 ### Calls
 
-- **Call list** — server-aware paginated call log with All/Missed filter
-- **Call detail** — shows caller info, photo and video when available
-  - **📞 Answer** — answer the call
-  - **🔴 Reject** — end call
-  - **🔓 Open door** — open the linked door
-  - **📹 Video** — open video stream URL
+- The call list is paginated and supports explicit **Все / Пропущенные** filters.
+- Opening a call and returning to the list preserves the current page and filter.
+- Historical call details show the door, time and answered/missed status.
+- Completed/historical calls do **not** expose `Ответить`/`Сбросить`; only relevant actions such as **🔓 Открыть дверь** and **📹 Камера** are available.
+
+Live incoming-call notifications are interactive cards. Depending on available data they can include **🔓 Открыть**, **📞 Ответить**, **Сбросить**, and **📹 Камера**. Successful actions update the existing Telegram card instead of replacing it with a context-free message; failed actions preserve retryable controls.
 
 ### Admin panel
 
-- **👥 Users** → user management
-  - add a regular user
-  - grant admin rights to an existing allowed user
-  - remove a user with double confirmation
-  - the last active administrator cannot be removed
-- **🔑 /auth** — request SMS code from Domonap
-- **🚪 /logout** — clear the Domonap session
+- **👥 Пользователи** → user management
+  - create a one-time invite link instead of entering Telegram IDs manually;
+  - open a user detail screen;
+  - promote an allowed user to administrator;
+  - revoke administrator rights with explicit confirmation;
+  - remove a user with explicit confirmation;
+  - the last active administrator cannot be removed or demoted.
+- **🔑 Подключить Domonap** → start the same SMS reply flow as `/auth`.
+- **Выйти из Domonap** → clear the persisted Domonap session.
 
-Authorization uses Domonap's SMS-based flow:
+Invite links are bearer credentials: they are one-time, expire after 15 minutes, and are stored only as a SHA-256-derived value plus metadata. An invite is consumed by opening its Telegram `/start invite_<token>` deep link; ordinary `/start` remains fail-closed for unknown users.
+
+## Domonap SMS authorization
+
+Authorization uses a reply-based flow; users no longer need to type `/code <code>` manually:
 
 1. Set `DOMONAP_PHONE` and an allowed admin ID in `.env`.
-2. Send `/auth` to the bot. An SMS code is sent to your phone; the number is masked in responses and logs.
-3. Send `/code <sms_code>`. The message containing the code is automatically deleted when possible.
-4. Use `/status` to verify the connection.
+2. Send `/auth` or use **Управление → Подключить Domonap**.
+3. The bot requests an SMS and replies with a ForceReply prompt. The phone number shown in Telegram and logs is masked.
+4. Reply to that prompt with the numeric SMS code.
+5. The message containing the code is deleted when Telegram permits it. Invalid-format codes keep the reply flow active and prompt again; rejected/expired authorization clears the state and requires a fresh `/auth`.
+6. Use `/status` to verify the connection.
+
+`/code <code>` remains supported as a hidden compatibility fallback, and `/cancel` exits a pending reply flow.
 
 Domonap session values are stored in SQLite (`data/storage.db` by default) and encrypted with authenticated Fernet encryption using `STORAGE_ENCRYPTION_KEY`. Existing plaintext session fields from older versions are transparently encrypted on the first successful startup with a configured key. ACL records are not secrets and remain ordinary SQLite values. Use `/logout` to clear the persisted Domonap session.
 
@@ -146,8 +163,8 @@ When `CALL_WATCHER_ENABLED=true` (default), the bot monitors incoming calls and 
 - door name/address when available;
 - call time;
 - photo/preview when available;
-- **Open** button;
-- **Video** button when a stream URL is available.
+- **Open**, **Answer**, and **Reject** actions when applicable;
+- **Video** button when a safe stream URL is available.
 
 How it works:
 
@@ -155,5 +172,6 @@ How it works:
 2. If the SignalR session fails or ends, the watcher temporarily falls back to call-log polling and then reconnects.
 3. Call IDs are deduplicated using a bounded ordered cache.
 4. Door metadata is refreshed periodically and immediately when an unknown `doorId` appears.
+5. Incoming Telegram cards preserve their context while successful actions transition individual controls to terminal states.
 
 Disable with `CALL_WATCHER_ENABLED=false` in `.env`.
