@@ -65,6 +65,8 @@ docker compose run --rm --no-deps bot \
 
 Restore the matching `STORAGE_ENCRYPTION_KEY`, then `docker compose up -d` and verify `/status`, doors and effective ACL/admin roles.
 
+For a host deployed with `docker-compose.prod.yml`, use the same commands with `-f docker-compose.prod.yml`.
+
 ## Storage encryption key rotation
 
 Execute `/logout`, stop bot + backup, generate and configure a new Fernet key, restart, authenticate through `/auth`, verify `/status`, then create a fresh backup. Preserve the previous key only while old backups must remain recoverable.
@@ -110,13 +112,15 @@ Runtime/development versions are resolved through `constraints.txt`; the Docker 
 
 The workflow validates the requested version, reruns quality/security gates, builds the production image, publishes immutable GHCR tags `vX.Y.Z` and `sha-<commit>`, and creates a GitHub Release.
 
+`docker-compose.prod.yml` is a standalone production manifest and intentionally contains no `build:` directives. CI checks this invariant so a production deployment cannot silently build an unversioned local checkout.
+
 Production deployment:
 
 ```bash
 export DOMONAP_BOT_IMAGE=ghcr.io/mnevrov/domonap-telegram-bot:v1.0.0
 
-docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 Rollback by selecting the previous immutable tag and repeating the commands. Do not use `latest` as the rollback contract.
