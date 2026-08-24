@@ -68,6 +68,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # No suitable long-lived canary credential is currently available. Keep this
+      # explicit in the run, but do not turn an unconfigured optional control into a
+      # false production failure. Once the secret exists, degradation is blocking.
       - name: Report unconfigured canary
         if: steps.result.outputs.overall == 'skipped'
         run: |
