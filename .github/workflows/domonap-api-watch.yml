@@ -120,7 +120,7 @@ jobs:
 
       - name: Upload protocol analysis
         if: steps.release.outputs.apk_downloaded == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: domonap-api-watch-${{ steps.release.outputs.version }}
           path: /tmp/domonap-api-watch
