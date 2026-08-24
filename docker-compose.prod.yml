@@ -1,8 +1,54 @@
 services:
   bot:
     image: "${DOMONAP_BOT_IMAGE:?Set DOMONAP_BOT_IMAGE to an immutable GHCR release tag}"
-    build: null
+    env_file: ".env"
+    volumes:
+      - "./data:/app/data"
+      - "backups:/app/backups:ro"
+    tmpfs:
+      - "/tmp:size=16m,mode=1777"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   backup:
     image: "${DOMONAP_BOT_IMAGE:?Set DOMONAP_BOT_IMAGE to an immutable GHCR release tag}"
-    build: null
+    command: ["python", "-m", "domonap_bot.backup_daemon"]
+    environment:
+      STORAGE_PATH: "${STORAGE_PATH:-data/storage.db}"
+      BACKUP_DIR: "/app/backups"
+      BACKUP_INTERVAL_SECONDS: "${BACKUP_INTERVAL_SECONDS:-21600}"
+      BACKUP_RETENTION_COUNT: "${BACKUP_RETENTION_COUNT:-28}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      - "./data:/app/data:ro"
+      - "backups:/app/backups"
+    tmpfs:
+      - "/tmp:size=16m,mode=1777"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  backups:
