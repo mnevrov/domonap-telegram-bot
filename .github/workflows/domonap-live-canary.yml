@@ -39,8 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=src python -m domonap_bot.tools.api_probe \
-            --output /tmp/domonap-live-canary.json \
-            --strict-missing-token
+            --output /tmp/domonap-live-canary.json
 
       - name: Read canary result
         id: result
@@ -69,22 +68,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Open or update canary issue
+      - name: Report unconfigured canary
+        if: steps.result.outputs.overall == 'skipped'
+        run: |
+          echo "DOMONAP_CANARY_ACCESS_TOKEN is not configured; live compatibility is not verified."
+          echo "This is intentionally non-blocking until a canary credential is available."
+
+      - name: Open or update degraded-canary issue
         if: >-
           steps.result.outputs.overall == 'degraded' ||
-          steps.result.outputs.overall == 'failed' ||
-          steps.result.outputs.overall == 'skipped'
+          steps.result.outputs.overall == 'failed'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           OVERALL: ${{ steps.result.outputs.overall }}
         run: |
           set -euo pipefail
-          if [[ "$OVERALL" == "skipped" ]]; then
-            title="[api-canary] Domonap live canary not configured"
-          else
-            title="[api-canary] Domonap live compatibility degraded"
-          fi
+          title="[api-canary] Domonap live compatibility degraded"
           existing="$(gh issue list \
             --state open \
             --search "${title} in:title" \
@@ -103,11 +103,7 @@ jobs:
             echo
             echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo
-            if [[ "$OVERALL" == "skipped" ]]; then
-              echo "Configure repository secret DOMONAP_CANARY_ACCESS_TOKEN using a dedicated low-privilege Domonap account."
-            else
-              echo "The canary performs only read-only user/keys/call-log/SignalR negotiate requests."
-            fi
+            echo "The canary performs only read-only user/keys/call-log/SignalR negotiate requests."
           } > /tmp/canary-issue.md
           if [[ -z "$existing" ]]; then
             gh issue create --title "$title" --body-file /tmp/canary-issue.md
@@ -115,28 +111,26 @@ jobs:
             gh issue edit "$existing" --body-file /tmp/canary-issue.md
           fi
 
-      - name: Close resolved canary issues
+      - name: Close resolved degraded-canary issue
         if: steps.result.outputs.overall == 'compatible'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for title in \
-            "[api-canary] Domonap live canary not configured" \
-            "[api-canary] Domonap live compatibility degraded"
-          do
-            existing="$(gh issue list \
-              --state open \
-              --search "${title} in:title" \
-              --json number \
-              --jq '.[0].number // empty')"
-            if [[ -n "$existing" ]]; then
-              gh issue close "$existing" \
-                --comment "Resolved automatically: the latest read-only live canary is compatible."
-            fi
-          done
+          title="[api-canary] Domonap live compatibility degraded"
+          existing="$(gh issue list \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue close "$existing" \
+              --comment "Resolved automatically: the latest read-only live canary is compatible."
+          fi
 
-      - name: Fail unless canary is compatible
-        if: steps.result.outputs.overall != 'compatible'
+      - name: Fail on active canary degradation
+        if: >-
+          steps.result.outputs.overall == 'degraded' ||
+          steps.result.outputs.overall == 'failed'
         run: exit 1
