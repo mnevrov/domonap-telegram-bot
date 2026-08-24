@@ -189,7 +189,7 @@ Rollback выполняется заменой `DOMONAP_BOT_IMAGE` на пред
 
 Read-only Live Canary для реального Domonap API поддерживается workflow `.github/workflows/domonap-live-canary.yml`, но пока является необязательным контролем.
 
-Если repository secret `DOMONAP_CANARY_ACCESS_TOKEN` отсутствует, workflow явно показывает `skipped`, но не блокирует CI или production hardening. После добавления secret те же проверки автоматически начнут контролировать реальные user/keys/call-log/SignalR endpoints; обнаруженная деградация будет блокирующей.
+Если repository secret `DOMONAP_CANARY_ACCESS_TOKEN` отсутствует, workflow явно показывает `skipped`, но не блокирует CI или production hardening. После добавления secret те же проверки автоматически начнут контролировать реальные user/keys/call-log/SignalR endpoints; обнаруженная деградация будет блокирующей. Для включения canary позже достаточно добавить secret — менять код или workflow не потребуется.
 
 ## 12. Обновление из исходников
 
