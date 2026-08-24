@@ -1,0 +1,50 @@
+name: Master policy audit
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  verify-pr-origin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify master commit is associated with a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          count="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq 'length')"
+          if [[ "$count" != "0" ]]; then
+            exit 0
+          fi
+
+          title="[policy] direct push detected on master"
+          body="$(cat <<EOF
+          A commit reached \`master\` without an associated pull request.
+
+          Commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}
+          Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          This workflow is detective control only. Enable the repository ruleset from issue #49
+          to prevent direct pushes and require CI + Secret Scan before merge.
+          EOF
+          )"
+          existing="$(gh issue list \
+            --state open \
+            --search "${title} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -z "$existing" ]]; then
+            gh issue create --title "$title" --body "$body"
+          else
+            gh issue comment "$existing" --body "$body"
+          fi
+          exit 1

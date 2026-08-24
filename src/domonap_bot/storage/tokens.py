@@ -1,8 +1,10 @@
 from cryptography.fernet import Fernet, InvalidToken
+from pydantic import ValidationError
 
 from domonap_bot.domonap.models import AuthSession
 from domonap_bot.storage.base import Storage
 
+KEY_SESSION = "domonap_session_v2"
 KEY_ACCESS_TOKEN = "domonap_access_token"
 KEY_REFRESH_TOKEN = "domonap_refresh_token"
 KEY_REFRESH_EXPIRATION = "domonap_refresh_expiration"
@@ -11,7 +13,7 @@ KEY_INSTANCE_ID = "domonap_instance_id"
 KEY_PHONE = "domonap_phone"
 
 _FERNET_PREFIX = "fernet:v1:"
-_SESSION_KEYS = (
+_LEGACY_SESSION_KEYS = (
     KEY_ACCESS_TOKEN,
     KEY_REFRESH_TOKEN,
     KEY_REFRESH_EXPIRATION,
@@ -65,31 +67,46 @@ class TokenStorage:
             raise TokenStorageEncryptionError("Persisted Domonap session field binding is invalid")
         return field_value, False
 
-    async def _save_value(self, key: str, value: str | None) -> None:
-        if value:
-            await self._storage.set(key, self._encrypt_value(key, value))
+    async def _delete_legacy_values(self) -> None:
+        for key in _LEGACY_SESSION_KEYS:
+            await self._storage.delete(key)
 
     async def save(self, session: AuthSession) -> None:
-        await self._save_value(KEY_ACCESS_TOKEN, session.access_token)
-        await self._save_value(KEY_REFRESH_TOKEN, session.refresh_token)
-        await self._save_value(KEY_REFRESH_EXPIRATION, session.refresh_expiration_date)
-        await self._save_value(KEY_DEVICE_TOKEN, session.device_token)
-        await self._save_value(KEY_INSTANCE_ID, session.instance_id)
-        await self._save_value(KEY_PHONE, session.phone)
+        """Persist the complete session as one authenticated record.
 
-    async def load(self) -> str | None:
-        value, _ = self._decrypt_value(
-            KEY_ACCESS_TOKEN, await self._storage.get(KEY_ACCESS_TOKEN)
-        )
-        return value
+        Writing the packed record first makes refresh-token rotation crash-safe: readers
+        either observe the previous complete record or the new complete record, never a
+        mixture of independently committed fields. Legacy keys are removed only after the
+        new record is durable.
+        """
+        serialized = session.model_dump_json()
+        await self._storage.set(KEY_SESSION, self._encrypt_value(KEY_SESSION, serialized))
+        await self._delete_legacy_values()
 
-    async def load_full(self) -> AuthSession | None:
+    async def _load_packed(self) -> AuthSession | None:
+        encoded = await self._storage.get(KEY_SESSION)
+        if encoded is None:
+            return None
+
+        serialized, needs_encryption = self._decrypt_value(KEY_SESSION, encoded)
+        if serialized is None:
+            return None
+        try:
+            session = AuthSession.model_validate_json(serialized)
+        except (ValidationError, ValueError) as exc:
+            raise TokenStorageEncryptionError(
+                "Persisted Domonap session payload is invalid"
+            ) from exc
+
+        if needs_encryption and self._fernet is not None:
+            await self.save(session)
+        return session if session.access_token else None
+
+    async def _load_legacy(self) -> AuthSession | None:
         decoded: dict[str, str | None] = {}
-        needs_migration = False
-        for key in _SESSION_KEYS:
-            value, legacy_plaintext = self._decrypt_value(key, await self._storage.get(key))
+        for key in _LEGACY_SESSION_KEYS:
+            value, _ = self._decrypt_value(key, await self._storage.get(key))
             decoded[key] = value
-            needs_migration = needs_migration or legacy_plaintext
 
         access = decoded[KEY_ACCESS_TOKEN]
         if not access:
@@ -103,20 +120,26 @@ class TokenStorage:
             instance_id=decoded[KEY_INSTANCE_ID] or "",
             phone=decoded[KEY_PHONE] or "",
         )
-        if needs_migration and self._fernet is not None:
-            await self.save(session)
+        await self.save(session)
         return session
 
+    async def load(self) -> str | None:
+        session = await self.load_full()
+        return session.access_token if session is not None else None
+
+    async def load_full(self) -> AuthSession | None:
+        packed = await self._load_packed()
+        if packed is not None:
+            return packed
+        return await self._load_legacy()
+
     async def load_refresh(self) -> str | None:
-        value, _ = self._decrypt_value(
-            KEY_REFRESH_TOKEN, await self._storage.get(KEY_REFRESH_TOKEN)
-        )
-        return value
+        session = await self.load_full()
+        return session.refresh_token if session is not None else None
 
     async def clear(self) -> None:
-        await self._storage.delete(KEY_ACCESS_TOKEN)
-        await self._storage.delete(KEY_REFRESH_TOKEN)
-        await self._storage.delete(KEY_REFRESH_EXPIRATION)
-        await self._storage.delete(KEY_DEVICE_TOKEN)
-        await self._storage.delete(KEY_INSTANCE_ID)
-        await self._storage.delete(KEY_PHONE)
+        # Delete legacy records first and the authoritative packed record last. A crash
+        # during cleanup can therefore leave the current complete session in place, but
+        # cannot resurrect an older legacy token set after KEY_SESSION is removed.
+        await self._delete_legacy_values()
+        await self._storage.delete(KEY_SESSION)
