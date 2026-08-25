@@ -128,3 +128,4 @@ class SqliteStorage(Storage):
     async def remove_user(self, telegram_id: int) -> None:
         await self.delete(f"access:allowed:{telegram_id}")
         await self.delete(f"access:admin:{telegram_id}")
+        await self.delete(f"user:profile:{telegram_id}")

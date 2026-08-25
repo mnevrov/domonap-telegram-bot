@@ -14,6 +14,7 @@ from domonap_bot.telegram.invites import InviteManager
 from domonap_bot.telegram.keyboards import (
     admin_panel_keyboard,
     back_keyboard,
+    confirm_logout_keyboard,
     confirm_remove_user_keyboard,
     confirm_revoke_admin_keyboard,
     user_detail_keyboard,
@@ -45,12 +46,16 @@ def register_admin_handlers(
     async def _render_user_list(message: Message) -> None:
         users = sorted(await storage.list_allowed_users())
         admin_ids = set(await storage.list_admin_users())
+        profiles = {uid: await storage.get_user_profile(uid) for uid in users}
         text = "👥 Пользователи"
         if users:
             text += f"\n\nВсего: {len(users)}\nВыберите пользователя:"
         else:
             text += "\n\nПользователей пока нет."
-        await message.edit_text(text, reply_markup=user_list_keyboard(users, admin_ids))
+        await message.edit_text(
+            text,
+            reply_markup=user_list_keyboard(users, admin_ids, profiles),
+        )
 
     async def _render_user_detail(message: Message, user_id: int) -> bool:
         if not await storage.is_user_allowed(user_id):
@@ -271,6 +276,19 @@ def register_admin_handlers(
     @router.callback_query(F.data == "a:logout")
     @admin_access.require_access
     async def callback_admin_logout(callback: CallbackQuery, state: FSMContext) -> None:
+        message = editable_callback_message(callback)
+        if message is None:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
+        await callback.answer()
+        await message.edit_text(
+            "Выйти из Domonap?\n\nОбщая сохранённая сессия будет удалена.",
+            reply_markup=confirm_logout_keyboard(),
+        )
+
+    @router.callback_query(F.data == "a:logoutc")
+    @admin_access.require_access
+    async def callback_admin_logout_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         message = editable_callback_message(callback)
         if message is None:
             await callback.answer("Сообщение недоступно", show_alert=True)

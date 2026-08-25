@@ -20,6 +20,7 @@ from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.bot import build_bot
 from domonap_bot.telegram.call_watcher import CallWatcher
 from domonap_bot.telegram.commands import configure_bot_commands
+from domonap_bot.web.camera_proxy import CameraProxy, start_camera_proxy, stop_camera_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,8 @@ async def main() -> None:
     heartbeat_task: asyncio.Task[None] | None = None
     watchdog: HeartbeatWatchdog | None = None
     compatibility_monitor: RuntimeCompatibilityMonitor | None = None
+    camera_proxy: CameraProxy | None = None
+    camera_proxy_runner = None
     persistence_tasks: set[asyncio.Task[None]] = set()
 
     try:
@@ -148,6 +151,30 @@ async def main() -> None:
             compatibility_monitor.report()["profile"]["name"],
         )
 
+        camera_secret = (
+            settings.camera_proxy_secret.get_secret_value().strip()
+            if settings.camera_proxy_secret is not None
+            else ""
+        )
+        if settings.public_base_url and camera_secret:
+            try:
+                camera_proxy = CameraProxy(
+                    client,
+                    public_base_url=settings.public_base_url,
+                    secret=camera_secret,
+                    link_ttl_seconds=settings.camera_link_ttl_seconds,
+                )
+                camera_proxy_runner = await start_camera_proxy(
+                    camera_proxy, "0.0.0.0", settings.camera_proxy_port
+                )
+                logger.info("Camera proxy listening on port %s", settings.camera_proxy_port)
+            except ValueError as exc:
+                logger.error("Camera proxy disabled: %s", exc)
+        elif settings.public_base_url or camera_secret:
+            logger.warning(
+                "Camera proxy disabled: PUBLIC_BASE_URL and CAMERA_PROXY_SECRET are both required"
+            )
+
         try:
             restored = await client.hydrate_from_storage()
         except TokenStorageEncryptionError as exc:
@@ -160,10 +187,22 @@ async def main() -> None:
         )
 
         access = AccessControl(settings.allowed_telegram_user_ids)
-        bot, dp = await build_bot(settings, client, storage, access=access)
+        bot, dp = await build_bot(
+            settings,
+            client,
+            storage,
+            access=access,
+            camera_url_provider=camera_proxy.url_for if camera_proxy else None,
+        )
         await configure_bot_commands(bot)
 
-        watcher = CallWatcher(client, bot, settings, access=access)
+        watcher = CallWatcher(
+            client,
+            bot,
+            settings,
+            access=access,
+            camera_url_provider=camera_proxy.url_for if camera_proxy else None,
+        )
         await watcher.start()
 
         def runtime_is_healthy() -> bool:
@@ -185,6 +224,8 @@ async def main() -> None:
         clear_heartbeat()
         if watcher is not None:
             await _bounded_close("call watcher", watcher.stop)
+        if camera_proxy_runner is not None:
+            await _bounded_close("camera proxy", lambda: stop_camera_proxy(camera_proxy_runner))
         if bot is not None:
             await _bounded_close("Telegram bot session", bot.session.close)
         if client is not None:

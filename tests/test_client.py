@@ -127,6 +127,45 @@ class TestClientGetDoors:
         assert doors[0].name == "Door 1"
         assert doors[1].domofon_public_pin == "1111"
 
+
+class TestClientWhep:
+    @respx.mock
+    async def test_create_whep_session_uses_bearer_and_returns_location(
+        self, client: DomonapClient
+    ) -> None:
+        route = respx.post(
+            "https://webrtc.example/camera-1/whep?token=test_access_token"
+        ).mock(
+            return_value=Response(
+                201,
+                headers={"Location": "https://webrtc.example/session/1"},
+                text="answer-sdp",
+            )
+        )
+
+        session = await client.create_whep_session(
+            "https://webrtc.example/camera-1/whep", "offer-sdp"
+        )
+
+        assert route.called
+        assert route.calls[0].request.content == b"offer-sdp"
+        assert session.location == "https://webrtc.example/session/1"
+        assert session.answer_sdp == "answer-sdp"
+
+    @respx.mock
+    async def test_whep_session_replaces_existing_token_query(
+        self, client: DomonapClient
+    ) -> None:
+        route = respx.patch(
+            "https://webrtc.example/session/1?token=test_access_token"
+        ).mock(return_value=Response(204))
+
+        await client.patch_whep_session(
+            "https://webrtc.example/session/1?token=stale-token", "candidate"
+        )
+
+        assert route.called
+
     @respx.mock
     async def test_reads_all_pages_and_deduplicates_by_door_id(
         self, client: DomonapClient

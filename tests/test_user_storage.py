@@ -50,3 +50,15 @@ async def test_remove_user_does_not_affect_other_users(storage: SqliteStorage) -
     await storage.set_user_allowed(7)
     await storage.remove_user(42)
     assert await storage.is_user_allowed(7) is True
+
+
+async def test_user_profile_roundtrip_and_removal(storage: SqliteStorage) -> None:
+    await storage.set_user_profile(42, first_name="Alice", username="alice")
+
+    assert await storage.get_user_profile(42) == {
+        "first_name": "Alice",
+        "username": "alice",
+    }
+
+    await storage.remove_user(42)
+    assert await storage.get_user_profile(42) == {}

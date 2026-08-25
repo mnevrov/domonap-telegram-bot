@@ -16,6 +16,8 @@ from domonap_bot.domonap.client import BASE_URL, DomonapClient
 from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
 from domonap_bot.domonap.signalr import DomonapSignalRTransport
 from domonap_bot.telegram.access import AccessControl
+from domonap_bot.telegram.callback_utils import compact_callback_id
+from domonap_bot.telegram.keyboards import CameraUrlProvider
 from domonap_bot.telegram.url_policy import safe_http_url
 
 logger = logging.getLogger(__name__)
@@ -52,11 +54,13 @@ class CallWatcher:
         *,
         event_source: CallEventSource | None = None,
         access: AccessControl | None = None,
+        camera_url_provider: CameraUrlProvider | None = None,
     ) -> None:
         self._client = client
         self._bot = bot
         self._settings = settings
         self._access = access
+        self._camera_url_provider = camera_url_provider
         self._task: asyncio.Task[Any] | None = None
         self._seen_ids: set[str] = set()
         self._seen_order: deque[str] = deque()
@@ -225,7 +229,11 @@ class CallWatcher:
 
         video_url = safe_http_url(payload.video_preview)
         if not video_url and door:
-            video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+            video_url = (
+                safe_http_url(self._camera_url_provider(door))
+                if self._camera_url_provider is not None
+                else safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+            )
 
         failed_user_ids = await self._send_notification(
             user_ids=user_ids,
@@ -250,11 +258,12 @@ class CallWatcher:
             return
 
         door = await self._resolve_door(entry.door_id)
-        video_url = (
-            safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
-            if door
-            else None
-        )
+        if door is None:
+            video_url = None
+        elif self._camera_url_provider is not None:
+            video_url = safe_http_url(self._camera_url_provider(door))
+        else:
+            video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
 
         failed_user_ids = await self._send_notification(
             user_ids=user_ids,
@@ -297,29 +306,29 @@ class CallWatcher:
         call_id: str | None = None,
     ) -> InlineKeyboardMarkup | None:
         buttons: list[list[InlineKeyboardButton]] = []
-        if door_id:
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        text="🔓 Открыть",
-                        callback_data=f"open:{door_id}",
-                        style="success",
-                    )
-                ]
-            )
         if call_id:
             buttons.append(
                 [
                     InlineKeyboardButton(
                         text="📞 Ответить",
-                        callback_data=f"answer:{call_id}",
+                        callback_data=f"answer:{compact_callback_id('answer:', call_id)}",
                         style="primary",
                     ),
                     InlineKeyboardButton(
-                        text="Сбросить",
-                        callback_data=f"reject:{call_id}",
+                        text="Отклонить",
+                        callback_data=f"reject:{compact_callback_id('reject:', call_id)}",
                         style="danger",
                     ),
+                ]
+            )
+        if door_id:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="🔓 Открыть",
+                        callback_data=f"open:{compact_callback_id('open:', door_id)}",
+                        style="success",
+                    )
                 ]
             )
         safe_video_url = safe_http_url(video_url)

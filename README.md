@@ -102,6 +102,7 @@ The main UI uses inline keyboards. SMS authorization is the only temporary state
 - **🔓 Открыть дверь** → paginated door list with direct open actions
 - **📞 Звонки** → call log with `Все / Пропущенные` filters
 - **⚙️ Управление** → admin panel (admins only)
+- If Domonap is disconnected, administrators also see **🔑 Подключить Domonap** directly on the home screen.
 
 The home screen is rendered from local auth/admin state and does not call Domonap merely to build the menu.
 
@@ -132,9 +133,9 @@ Live incoming-call notifications are interactive cards. Depending on available d
   - remove a user with explicit confirmation;
   - the last active administrator cannot be removed or demoted.
 - **🔑 Подключить Domonap** → start the same SMS reply flow as `/auth`.
-- **Выйти из Domonap** → clear the persisted Domonap session.
+- **Выйти из Domonap** → asks for confirmation before clearing the persisted Domonap session.
 
-Invite links are bearer credentials: they are one-time, expire after 15 minutes, and are stored only as a SHA-256-derived value plus metadata. An invite is consumed by opening its Telegram `/start invite_<token>` deep link; ordinary `/start` remains fail-closed for unknown users.
+Invite links are bearer credentials: they are one-time, expire after 15 minutes, and are stored only as a SHA-256-derived value plus metadata. An invite is consumed by opening its Telegram `/start invite_<token>` deep link; ordinary `/start` remains fail-closed for unknown users. The admin user list shows the latest Telegram display name/username when available.
 
 ## Domonap SMS authorization
 
@@ -165,6 +166,7 @@ When `CALL_WATCHER_ENABLED=true` (default), the bot monitors incoming calls and 
 - photo/preview when available;
 - **Open**, **Answer**, and **Reject** actions when applicable;
 - **Video** button when a safe stream URL is available.
+- The status command also reports the number of available doors and whether call notifications are enabled.
 
 How it works:
 

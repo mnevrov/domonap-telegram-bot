@@ -6,10 +6,10 @@ from aiogram.types import CallbackQuery
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.telegram.access import AccessControl
-from domonap_bot.telegram.callback_utils import editable_callback_message
+from domonap_bot.telegram.callback_utils import editable_callback_message, resolve_callback_id
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error
-from domonap_bot.telegram.keyboards import back_keyboard
+from domonap_bot.telegram.keyboards import CameraUrlProvider, back_keyboard, retry_back_keyboard
 from domonap_bot.telegram.navigation import NavigationStore
 from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text
 from domonap_bot.telegram.ui.views import View, door_detail_view, door_list_view
@@ -25,6 +25,7 @@ def register_door_handlers(
     access: AccessControl,
     cooldown: CooldownManager,
     navigation: NavigationStore | None = None,
+    camera_url_provider: CameraUrlProvider | None = None,
 ) -> None:
     nav = navigation if navigation is not None else NavigationStore()
 
@@ -41,7 +42,7 @@ def register_door_handlers(
                 message,
                 View(
                     "Не удалось загрузить двери.",
-                    back_keyboard("m:main", "← Главное меню"),
+                    retry_back_keyboard(f"d:p:{page}"),
                 ),
             )
             return
@@ -59,6 +60,7 @@ def register_door_handlers(
                 page=page,
                 total_pages=total_pages,
                 total=total,
+                camera_url_provider=camera_url_provider,
             ),
         )
 
@@ -104,7 +106,7 @@ def register_door_handlers(
         if message is None:
             await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
-        door_id = data.removeprefix("d:det:")
+        door_id = resolve_callback_id(data.removeprefix("d:det:"))
 
         await acknowledge_callback(callback)
         try:
@@ -127,7 +129,7 @@ def register_door_handlers(
             )
             return
 
-        await edit_text(message, door_detail_view(door))
+        await edit_text(message, door_detail_view(door, camera_url_provider=camera_url_provider))
 
     @router.callback_query(F.data.startswith("d:open:"))
     @access.require_access
@@ -140,7 +142,7 @@ def register_door_handlers(
         if message is None:
             await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
-        door_id = data.removeprefix("d:open:")
+        door_id = resolve_callback_id(data.removeprefix("d:open:"))
         user_id = callback.from_user.id if callback.from_user else 0
 
         if not cooldown.is_ready(user_id, door_id):
@@ -158,19 +160,23 @@ def register_door_handlers(
         try:
             success = await client.open_door(door_id)
         except DomonapError as exc:
+            cooldown.clear(user_id, door_id)
             await edit_text(
                 message,
                 View(
                     f"❌ {describe_error(exc)}",
-                    back_keyboard("d:back", "← К дверям"),
+                    back_keyboard("d:back", "← Двери"),
                 ),
             )
             return
 
+        if not success:
+            cooldown.clear(user_id, door_id)
+
         if success:
             view = View(
                 "✅ Дверь открыта.",
-                back_keyboard("d:back", "← К дверям"),
+                back_keyboard("d:back", "← Двери"),
             )
         else:
             view = View(

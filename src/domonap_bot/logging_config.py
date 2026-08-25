@@ -6,8 +6,8 @@ _THIRD_PARTY_LOGGERS = (
     "aiohttp",
     "aiosqlite",
     "httpcore",
-    "httpx",
 )
+_httpx_logger = logging.getLogger("httpx")
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -27,3 +27,6 @@ def setup_logging(level: str = "INFO") -> None:
     third_party_level = max(requested_level, logging.INFO)
     for logger_name in _THIRD_PARTY_LOGGERS:
         logging.getLogger(logger_name).setLevel(third_party_level)
+    # WHEP auth is carried in an upstream query parameter; httpx request logs
+    # must not expose that token.
+    _httpx_logger.setLevel(logging.WARNING)

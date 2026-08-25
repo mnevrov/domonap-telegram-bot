@@ -135,7 +135,8 @@ class TestMainMenu:
         msg = _make_message(user_id=42)
         await router.message.handlers[0].callback(msg)
 
-        assert msg.answer.await_args.args[0] == "Доступ к боту не разрешён."
+        assert "Доступ к боту не разрешён." in msg.answer.await_args.args[0]
+        assert "приглашению" in msg.answer.await_args.args[0]
 
     async def test_callback_home_acknowledges_without_remote_request(self) -> None:
         router = Router()
@@ -157,6 +158,26 @@ class TestMainMenu:
         cb.answer.assert_awaited_once()
         text = cb.message.edit_text.call_args[0][0]
         assert "Domonap не подключён" in text
+
+    async def test_unconnected_home_does_not_offer_unavailable_actions(self) -> None:
+        router = Router()
+        client = MagicMock()
+        client.access_token = None
+        client.refresh_token = None
+        _register(router, client)
+
+        msg = _make_message(user_id=1)
+        await router.message.handlers[0].callback(msg)
+
+        keyboard = msg.answer.call_args.kwargs["reply_markup"]
+        callbacks = {
+            button.callback_data
+            for row in keyboard.inline_keyboard
+            for button in row
+            if button.callback_data
+        }
+        assert "d:p:0" not in callbacks
+        assert "c:p:0" not in callbacks
 
     async def test_noop_answers(self) -> None:
         router = Router()

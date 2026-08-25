@@ -11,6 +11,7 @@ from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.doors import register_door_handlers
 from domonap_bot.telegram.handlers import register_handlers
 from domonap_bot.telegram.invites import InviteManager
+from domonap_bot.telegram.keyboards import CameraUrlProvider
 from domonap_bot.telegram.menu import register_menu_handlers
 from domonap_bot.telegram.navigation import NavigationStore
 
@@ -20,6 +21,7 @@ async def build_bot(
     client: DomonapClient,
     storage: Storage | None = None,
     access: AccessControl | None = None,
+    camera_url_provider: CameraUrlProvider | None = None,
 ) -> tuple[Bot, Dispatcher]:
     session = AiohttpSession()
     session.timeout = 120
@@ -43,7 +45,15 @@ async def build_bot(
 
     cooldown = CooldownManager()
     navigation = NavigationStore()
-    register_handlers(router, client, runtime_access, admin_access, cooldown)
+    register_handlers(
+        router,
+        client,
+        runtime_access,
+        admin_access,
+        cooldown,
+        bot=bot,
+        call_watcher_enabled=settings.call_watcher_enabled,
+    )
 
     if storage is not None:
         invites = InviteManager(storage)
@@ -65,8 +75,12 @@ async def build_bot(
             invites,
         )
 
-    register_door_handlers(router, client, runtime_access, cooldown, navigation)
-    register_call_handlers(router, client, runtime_access, cooldown, navigation)
+    register_door_handlers(
+        router, client, runtime_access, cooldown, navigation, camera_url_provider
+    )
+    register_call_handlers(
+        router, client, runtime_access, cooldown, navigation, camera_url_provider
+    )
 
     dp.include_router(router)
     return bot, dp

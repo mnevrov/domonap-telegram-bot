@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from secrets import token_bytes
 from typing import Any, Callable
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from uuid import UUID
 
 import httpx
@@ -37,6 +38,12 @@ _MAX_KEYS_PAGES = 100
 _ANDROID_GUID_RETRY_LIMIT = 8
 _MAX_CALL_LOG_PAGES = 100
 _generated_android_guids: set[str] = set()
+
+
+class WhepSession:
+    def __init__(self, location: str, answer_sdp: str) -> None:
+        self.location = location
+        self.answer_sdp = answer_sdp
 
 
 def _generate_android_guid() -> str:
@@ -325,6 +332,93 @@ class DomonapClient:
                 return True
             except SessionExpiredError:
                 return False
+
+    async def _external_authorized_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        content: str | None = None,
+        content_type: str,
+        retry_on_401: bool = True,
+    ) -> httpx.Response:
+        if self._refresh_token_invalid:
+            raise SessionExpiredError("Session expired")
+        if not self.access_token:
+            raise TokenExpiredError("No access token available")
+        await self._ensure_alive()
+        if not self.access_token:
+            raise SessionExpiredError("Session expired")
+
+        first_try_access_token = self.access_token
+
+        async def _do() -> httpx.Response:
+            parsed_url = urlsplit(url)
+            query = [
+                (key, value)
+                for key, value in parse_qsl(parsed_url.query, keep_blank_values=True)
+                if key != "token"
+            ]
+            query.append(("token", self.access_token or ""))
+            current_url = urlunsplit(
+                parsed_url._replace(query=urlencode(query))
+            )
+            headers = {
+                **dict(self._http.headers),
+                "Content-Type": content_type,
+                "Accept": "application/sdp",
+            }
+            try:
+                return await self._http.request(
+                    method, current_url, content=content, headers=headers
+                )
+            except httpx.TimeoutException as exc:
+                raise NetworkError("Request timed out") from exc
+            except httpx.ConnectError as exc:
+                raise NetworkError("Connection failed") from exc
+            except httpx.HTTPError as exc:
+                raise NetworkError(f"HTTP transport error: {exc}") from exc
+
+        response = await _do()
+        if response.status_code == 401 and retry_on_401 and self.refresh_token:
+            if await self._try_refresh(first_try_access_token):
+                response = await _do()
+        if response.is_success:
+            return response
+        body = response.text[:2000]
+        if response.status_code == 401:
+            if self._refresh_token_invalid:
+                raise SessionExpiredError(f"HTTP 401: {body}")
+            raise TokenExpiredError(f"HTTP 401: {body}")
+        raise ApiError(f"HTTP {response.status_code}: {body}")
+
+    async def create_whep_session(self, whep_url: str, offer_sdp: str) -> WhepSession:
+        response = await self._external_authorized_request(
+            "POST",
+            whep_url,
+            content=offer_sdp,
+            content_type="application/sdp",
+        )
+        location = response.headers.get("Location")
+        if not location:
+            raise ApiError("WHEP response did not contain a session location")
+        return WhepSession(location=urljoin(whep_url, location), answer_sdp=response.text)
+
+    async def patch_whep_session(self, session_url: str, candidates_sdp: str) -> None:
+        await self._external_authorized_request(
+            "PATCH",
+            session_url,
+            content=candidates_sdp,
+            content_type="application/trickle-ice-sdpfrag",
+        )
+
+    async def delete_whep_session(self, session_url: str) -> None:
+        await self._external_authorized_request(
+            "DELETE",
+            session_url,
+            content=None,
+            content_type="application/sdp",
+        )
 
     async def _perform_token_refresh(self) -> None:
         if not self.refresh_token:

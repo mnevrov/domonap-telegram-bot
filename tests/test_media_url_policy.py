@@ -5,7 +5,11 @@ import pytest
 from domonap_bot.config import Settings
 from domonap_bot.domonap.models import DoorKey
 from domonap_bot.telegram.call_watcher import CallWatcher
-from domonap_bot.telegram.keyboards import call_detail_keyboard, door_detail_keyboard
+from domonap_bot.telegram.keyboards import (
+    call_detail_keyboard,
+    door_detail_keyboard,
+    door_list_keyboard,
+)
 from domonap_bot.telegram.url_policy import safe_http_url
 
 
@@ -45,6 +49,19 @@ def test_door_keyboard_omits_unsafe_video_url() -> None:
     )
 
     keyboard = door_detail_keyboard(door)
+
+    assert all(button.url is None for row in keyboard.inline_keyboard for button in row)
+
+
+def test_door_keyboard_validates_camera_provider_url() -> None:
+    door = DoorKey(id="key-1", doorId="door-1", name="Door")
+
+    keyboard = door_list_keyboard(
+        [door],
+        page=0,
+        total_pages=1,
+        camera_url_provider=lambda _: "javascript:alert(1)",
+    )
 
     assert all(button.url is None for row in keyboard.inline_keyboard for button in row)
 

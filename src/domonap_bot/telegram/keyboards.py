@@ -1,7 +1,12 @@
+from collections.abc import Callable
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from domonap_bot.domonap.models import CallLogEntry, DoorKey
+from domonap_bot.telegram.callback_utils import compact_callback_id
 from domonap_bot.telegram.url_policy import safe_http_url
+
+CameraUrlProvider = Callable[[DoorKey], str | None]
 
 
 def door_selection_keyboard(doors: list[DoorKey]) -> InlineKeyboardMarkup:
@@ -9,42 +14,61 @@ def door_selection_keyboard(doors: list[DoorKey]) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text=f"🔓 {door.name}",
-                callback_data=f"open:{door.door_id}",
+                callback_data=f"open:{compact_callback_id('open:', door.door_id)}",
                 style="success",
             )
         ]
         for door in doors
     ]
+    rows.append([InlineKeyboardButton(text="← Главное меню", callback_data="m:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                text="🔓 Открыть дверь",
-                callback_data="d:p:0",
-                style="success",
-            )
-        ],
-        [InlineKeyboardButton(text="📞 Звонки", callback_data="c:p:0")],
-    ]
+def main_menu_keyboard(is_admin: bool, *, authorized: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if authorized:
+        rows.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="🔓 Открыть дверь",
+                        callback_data="d:p:0",
+                        style="success",
+                    )
+                ],
+                [InlineKeyboardButton(text="📞 Звонки", callback_data="c:p:0")],
+            ]
+        )
     if is_admin:
         rows.append([InlineKeyboardButton(text="⚙️ Управление", callback_data="a:panel")])
+        if not authorized:
+            rows.append(
+                [InlineKeyboardButton(text="🔑 Подключить Domonap", callback_data="a:auth")]
+            )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def door_list_keyboard(doors: list[DoorKey], page: int, total_pages: int) -> InlineKeyboardMarkup:
+def door_list_keyboard(
+    doors: list[DoorKey],
+    page: int,
+    total_pages: int,
+    *,
+    camera_url_provider: CameraUrlProvider | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for door in doors:
         row = [
             InlineKeyboardButton(
                 text=f"🔓 {door.name}",
-                callback_data=f"d:open:{door.door_id}",
+                callback_data=f"d:open:{compact_callback_id('d:open:', door.door_id)}",
                 style="success",
             )
         ]
-        video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+        video_url = (
+            safe_http_url(camera_url_provider(door))
+            if camera_url_provider is not None
+            else safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+        )
         if video_url:
             row.append(InlineKeyboardButton(text="📹", url=video_url))
         rows.append(row)
@@ -61,17 +85,23 @@ def door_list_keyboard(doors: list[DoorKey], page: int, total_pages: int) -> Inl
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def door_detail_keyboard(door: DoorKey) -> InlineKeyboardMarkup:
+def door_detail_keyboard(
+    door: DoorKey, *, camera_url_provider: CameraUrlProvider | None = None
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 text="🔓 Открыть",
-                callback_data=f"d:open:{door.door_id}",
+                callback_data=f"d:open:{compact_callback_id('d:open:', door.door_id)}",
                 style="success",
             )
         ],
     ]
-    video_url = safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+    video_url = (
+        safe_http_url(camera_url_provider(door))
+        if camera_url_provider is not None
+        else safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
+    )
     if video_url:
         rows.append([InlineKeyboardButton(text="📹 Камера", url=video_url)])
     rows.append([InlineKeyboardButton(text="← Двери", callback_data="d:back")])
@@ -96,7 +126,7 @@ def call_list_keyboard(
             [
                 InlineKeyboardButton(
                     text=f"{status} {name} · {time_text}",
-                    callback_data=f"c:det:{entry.call_id}",
+                    callback_data=f"c:det:{compact_callback_id('c:det:', entry.call_id)}",
                 )
             ]
         )
@@ -138,7 +168,7 @@ def call_detail_keyboard(
             [
                 InlineKeyboardButton(
                     text="🔓 Открыть дверь",
-                    callback_data=f"open:{door_id}",
+                    callback_data=f"open:{compact_callback_id('open:', door_id)}",
                     style="success",
                 )
             ]
@@ -159,7 +189,6 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Выйти из Domonap",
                     callback_data="a:logout",
-                    style="danger",
                 )
             ],
             [InlineKeyboardButton(text="← Главное меню", callback_data="m:main")],
@@ -167,13 +196,30 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def confirm_logout_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, выйти", callback_data="a:logoutc", style="danger")],
+            [InlineKeyboardButton(text="Отмена", callback_data="a:panel")],
+        ]
+    )
+
+
 def user_list_keyboard(
-    users: list[int], admin_users: set[int] | None = None
+    users: list[int],
+    admin_users: set[int] | None = None,
+    profiles: dict[int, dict[str, str]] | None = None,
 ) -> InlineKeyboardMarkup:
     admin_ids = admin_users or set()
+    user_profiles = profiles or {}
     rows: list[list[InlineKeyboardButton]] = []
     for uid in users:
-        label = f"👤 {uid}{' 👑' if uid in admin_ids else ''}"
+        profile = user_profiles.get(uid, {})
+        display_name = profile.get("first_name") or profile.get("username") or str(uid)
+        username = profile.get("username")
+        if username and profile.get("first_name"):
+            display_name = f"{display_name} (@{username})"
+        label = f"👤 {display_name}{' 👑' if uid in admin_ids else ''}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"a:user:{uid}")])
     rows.append(
         [
@@ -256,4 +302,17 @@ def confirm_revoke_admin_keyboard(user_id: int) -> InlineKeyboardMarkup:
 def back_keyboard(dest: str = "m:main", text: str = "← Назад") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=dest)]]
+    )
+
+
+def retry_back_keyboard(
+    retry_callback: str,
+    back_callback: str = "m:main",
+    back_text: str = "← Главное меню",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔁 Повторить", callback_data=retry_callback)],
+            [InlineKeyboardButton(text=back_text, callback_data=back_callback)],
+        ]
     )

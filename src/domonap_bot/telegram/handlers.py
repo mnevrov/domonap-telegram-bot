@@ -1,6 +1,7 @@
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.enums import ChatAction
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
@@ -20,7 +21,7 @@ from domonap_bot.telegram.auth_flow import (
     submit_sms_code,
 )
 from domonap_bot.telegram.auth_flow import mask_phone as _mask_phone
-from domonap_bot.telegram.callback_utils import editable_callback_message
+from domonap_bot.telegram.callback_utils import editable_callback_message, resolve_callback_id
 from domonap_bot.telegram.cooldown import CooldownManager
 from domonap_bot.telegram.errors import describe_error as _describe_error
 from domonap_bot.telegram.keyboards import door_selection_keyboard
@@ -41,7 +42,13 @@ def register_handlers(
     access: AccessControl,
     admin_access: AccessControl,
     cooldown: CooldownManager,
+    bot: Bot | None = None,
+    call_watcher_enabled: bool = True,
 ) -> None:
+    async def _show_typing(message: Message) -> None:
+        if bot is not None and message.chat is not None:
+            await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
     async def _respond_error(
         target: Message | CallbackQuery,
         exc: DomonapError,
@@ -106,6 +113,7 @@ def register_handlers(
     @router.message(Command("status"))
     @access.require_access
     async def cmd_status(message: Message) -> None:
+        await _show_typing(message)
         has_token = client.access_token or client.refresh_token
         if not has_token:
             await message.answer(
@@ -132,6 +140,15 @@ def register_handlers(
             ]
             if username:
                 lines.append(f"Пользователь: {username}")
+            try:
+                door_count = len(await client.get_doors())
+            except (DomonapError, TypeError):
+                door_count = None
+            if door_count is not None:
+                lines.append(f"Дверей: {door_count}")
+            lines.append(
+                f"Уведомления о звонках: {'✅ включены' if call_watcher_enabled else '⏸ выключены'}"
+            )
             await message.answer("\n".join(lines))
         except (TokenExpiredError, SessionExpiredError):
             await message.answer(
@@ -152,6 +169,7 @@ def register_handlers(
     @router.message(Command("doors"))
     @access.require_access
     async def cmd_doors(message: Message) -> None:
+        await _show_typing(message)
         try:
             doors = await client.get_doors()
         except DomonapError as exc:
@@ -233,7 +251,10 @@ def register_handlers(
             await callback.answer("Некорректные данные", show_alert=True)
             return
         user_id = callback.from_user.id if callback.from_user else 0
-        door_id = callback.data.removeprefix("open:")
+        if editable_callback_message(callback) is None:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
+        door_id = resolve_callback_id(callback.data.removeprefix("open:"))
 
         if not cooldown.is_ready(user_id, door_id):
             remaining = cooldown.remaining(user_id, door_id)
@@ -249,8 +270,12 @@ def register_handlers(
         try:
             success = await client.open_door(door_id)
         except DomonapError as exc:
+            cooldown.clear(user_id, door_id)
             await _respond_error(callback, exc)
             return
+
+        if not success:
+            cooldown.clear(user_id, door_id)
 
         message = editable_callback_message(callback)
         keyboard = (
@@ -268,7 +293,10 @@ def register_handlers(
             await callback.answer("Некорректные данные", show_alert=True)
             return
         user_id = callback.from_user.id if callback.from_user else 0
-        call_id = callback.data.removeprefix("answer:")
+        if editable_callback_message(callback) is None:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
+        call_id = resolve_callback_id(callback.data.removeprefix("answer:"))
         cooldown_key = f"answer:{call_id}"
 
         if not cooldown.is_ready(user_id, cooldown_key):
@@ -285,8 +313,12 @@ def register_handlers(
         try:
             success = await client.answer_call(call_id)
         except DomonapError as exc:
+            cooldown.clear(user_id, cooldown_key)
             await _respond_error(callback, exc)
             return
+
+        if not success:
+            cooldown.clear(user_id, cooldown_key)
 
         message = editable_callback_message(callback)
         keyboard = (
@@ -308,7 +340,10 @@ def register_handlers(
             await callback.answer("Некорректные данные", show_alert=True)
             return
         user_id = callback.from_user.id if callback.from_user else 0
-        call_id = callback.data.removeprefix("reject:")
+        if editable_callback_message(callback) is None:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
+        call_id = resolve_callback_id(callback.data.removeprefix("reject:"))
         cooldown_key = f"reject:{call_id}"
 
         if not cooldown.is_ready(user_id, cooldown_key):
@@ -325,8 +360,12 @@ def register_handlers(
         try:
             success = await client.end_call(call_id)
         except DomonapError as exc:
+            cooldown.clear(user_id, cooldown_key)
             await _respond_error(callback, exc)
             return
+
+        if not success:
+            cooldown.clear(user_id, cooldown_key)
 
         message = editable_callback_message(callback)
         keyboard = (
@@ -362,8 +401,12 @@ async def _auto_open_door(
     try:
         success = await client.open_door(door_id)
     except DomonapError as exc:
+        cooldown.clear(user_id, door_id)
         await message.answer(_describe_error(exc))
         return
+
+    if not success:
+        cooldown.clear(user_id, door_id)
 
     if success:
         await message.answer(f"✅ {door.name}: дверь открыта.")

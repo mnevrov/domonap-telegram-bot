@@ -6,9 +6,9 @@ from aiogram.types import CallbackQuery
 from domonap_bot.domonap.client import DomonapClient
 from domonap_bot.domonap.exceptions import DomonapError
 from domonap_bot.telegram.access import AccessControl
-from domonap_bot.telegram.callback_utils import editable_callback_message
+from domonap_bot.telegram.callback_utils import editable_callback_message, resolve_callback_id
 from domonap_bot.telegram.cooldown import CooldownManager
-from domonap_bot.telegram.keyboards import back_keyboard
+from domonap_bot.telegram.keyboards import CameraUrlProvider, back_keyboard, retry_back_keyboard
 from domonap_bot.telegram.navigation import NavigationStore
 from domonap_bot.telegram.ui.renderer import acknowledge_callback, edit_text
 from domonap_bot.telegram.ui.views import View, call_detail_view, calls_view
@@ -25,6 +25,7 @@ def register_call_handlers(
     access: AccessControl,
     cooldown: CooldownManager,
     navigation: NavigationStore | None = None,
+    camera_url_provider: CameraUrlProvider | None = None,
 ) -> None:
     del cooldown
     nav = navigation if navigation is not None else NavigationStore()
@@ -57,7 +58,7 @@ def register_call_handlers(
                 message,
                 View(
                     "Не удалось загрузить журнал звонков.",
-                    back_keyboard("m:main", "← Главное меню"),
+                    retry_back_keyboard(f"c:p:{page}"),
                 ),
             )
             return
@@ -150,7 +151,7 @@ def register_call_handlers(
         if message is None:
             await acknowledge_callback(callback, "Сообщение недоступно", show_alert=True)
             return
-        call_id = data.removeprefix("c:det:")
+        call_id = resolve_callback_id(data.removeprefix("c:det:"))
 
         await acknowledge_callback(callback)
         try:
@@ -176,8 +177,10 @@ def register_call_handlers(
         try:
             doors = await client.get_doors()
             for door in doors:
-                url = safe_http_url(door.http_video_url) or safe_http_url(
-                    door.webrtc_video_url
+                url = (
+                    safe_http_url(camera_url_provider(door))
+                    if camera_url_provider is not None
+                    else safe_http_url(door.http_video_url) or safe_http_url(door.webrtc_video_url)
                 )
                 door_info_map[door.door_id] = (door.name, url)
                 door_info_map[door.id] = (door.name, url)

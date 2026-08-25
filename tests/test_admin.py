@@ -61,6 +61,17 @@ class TestAdminPanel:
         assert "Пользователей: 1" in text
         cb.answer.assert_awaited_once()
 
+    async def test_logout_requires_confirmation(self) -> None:
+        storage = FakeStorage()
+        handlers, _, _ = _build_admin_router(storage)
+        cb = _make_callback(1, "a:logout")
+
+        await handlers["callback_admin_logout"](cb, MagicMock())
+
+        assert "Выйти из Domonap?" in cb.message.edit_text.await_args.args[0]
+        keyboard = cb.message.edit_text.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].callback_data == "a:logoutc"
+
     async def test_admin_panel_blocks_non_admin(self) -> None:
         storage = FakeStorage()
         handlers, _, _ = _build_admin_router(storage)

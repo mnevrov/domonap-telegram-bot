@@ -7,3 +7,11 @@ __pycache__/
 data/
 backups/
 .env
+
+# Local agent tooling and generated analysis artifacts.
+.agents/
+.codex/
+.serena/
+.superpowers/
+graphify-out/
+docs/superpowers/

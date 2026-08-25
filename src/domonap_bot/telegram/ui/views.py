@@ -4,6 +4,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 from domonap_bot.domonap.models import CallLogEntry, DoorKey
 from domonap_bot.telegram.keyboards import (
+    CameraUrlProvider,
     call_detail_keyboard,
     call_list_keyboard,
     door_detail_keyboard,
@@ -23,7 +24,11 @@ def home_view(*, authorized: bool, is_admin: bool) -> View:
         text = "🏠 Домофон\n\nВыберите действие."
     else:
         text = "🏠 Домофон\n\n⚠️ Domonap не подключён."
-    return View(text=text, keyboard=main_menu_keyboard(is_admin))
+    if not authorized and is_admin:
+        text = "🏠 Домофон\n\n⚠️ Domonap не подключён. Нажмите «Подключить Domonap»."
+    elif not authorized:
+        text = "🏠 Домофон\n\n⚠️ Domonap не подключён. Сообщите администратору."
+    return View(text=text, keyboard=main_menu_keyboard(is_admin, authorized=authorized))
 
 
 def door_list_view(
@@ -32,15 +37,23 @@ def door_list_view(
     page: int,
     total_pages: int,
     total: int,
+    camera_url_provider: CameraUrlProvider | None = None,
 ) -> View:
     if not doors:
         text = "🚪 Открыть дверь\n\nДоступных дверей нет."
     else:
         text = f"🚪 Открыть дверь ({total})\n\nКакую дверь открыть?"
-    return View(text=text, keyboard=door_list_keyboard(doors, page, total_pages))
+    return View(
+        text=text,
+        keyboard=door_list_keyboard(
+            doors, page, total_pages, camera_url_provider=camera_url_provider
+        ),
+    )
 
 
-def door_detail_view(door: DoorKey) -> View:
+def door_detail_view(
+    door: DoorKey, *, camera_url_provider: CameraUrlProvider | None = None
+) -> View:
     parts = [f"🚪 {door.name or 'Дверь'}"]
     if door.domofon_public_pin:
         pin = door.domofon_public_pin
@@ -48,7 +61,10 @@ def door_detail_view(door: DoorKey) -> View:
         parts.append(f"PIN: {masked}")
     if door.http_video_url or door.webrtc_video_url:
         parts.append("📹 Камера доступна")
-    return View(text="\n".join(parts), keyboard=door_detail_keyboard(door))
+    return View(
+        text="\n".join(parts),
+        keyboard=door_detail_keyboard(door, camera_url_provider=camera_url_provider),
+    )
 
 
 def calls_view(

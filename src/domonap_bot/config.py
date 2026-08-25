@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     storage_encryption_key: SecretStr | None = None
     log_level: str = "INFO"
     call_watcher_enabled: bool = True
+    public_base_url: str = ""
+    camera_proxy_secret: SecretStr | None = None
+    camera_proxy_port: int = 8080
+    camera_link_ttl_seconds: int = 300
 
     @field_validator("allowed_telegram_user_ids", "admin_telegram_user_ids", mode="before")
     @classmethod
@@ -64,6 +68,10 @@ class Settings(BaseSettings):
                 "ADMIN_TELEGRAM_USER_IDS must be a subset of ALLOWED_TELEGRAM_USER_IDS; "
                 f"not allowed: {unexpected_admins}"
             )
+        if self.camera_proxy_port not in range(1, 65536):
+            raise ValueError("CAMERA_PROXY_PORT must be between 1 and 65535")
+        if self.camera_link_ttl_seconds <= 0:
+            raise ValueError("CAMERA_LINK_TTL_SECONDS must be positive")
         return self
 
     @property

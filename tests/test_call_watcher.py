@@ -169,6 +169,7 @@ class TestDeduplication:
         kb = watcher._build_keyboard(door_id="d1", video_url="https://example.com/video")
         assert kb is not None
         assert len(kb.inline_keyboard) == 2
+        assert kb.inline_keyboard[0][0].text == "🔓 Открыть"
 
     async def test_keyboard_no_buttons(
         self, watcher: CallWatcher,
@@ -186,7 +187,7 @@ class TestDeduplication:
         assert row[0].text == "📞 Ответить"
         assert row[0].style == "primary"
         assert row[1].callback_data == "reject:c1"
-        assert row[1].text == "Сбросить"
+        assert row[1].text == "Отклонить"
         assert row[1].style == "danger"
 
     async def test_handle_entry_notification_includes_call_buttons(

@@ -29,6 +29,10 @@ class CooldownManager:
             return 0.0
         return max(0.0, self._timeout - (monotonic() - last))
 
+    def clear(self, user_id: int, action_id: str) -> None:
+        """Release a failed action so the user can retry immediately."""
+        self._cooldowns.pop((user_id, action_id), None)
+
     def clear_expired(self) -> int:
         now = monotonic()
         expired = [k for k, t in self._cooldowns.items() if now - t >= self._timeout]

@@ -370,6 +370,22 @@ class TestAnswerAndEndCall:
             "❌ Не удалось ответить на звонок."
         )
 
+    async def test_answer_call_failure_allows_retry(self) -> None:
+        client = MagicMock()
+        client.answer_call = AsyncMock(side_effect=[False, True])
+        handlers = _build_callback_handlers(client)
+
+        first = _make_callback(user_id=1)
+        first.data = "answer:call123"
+        await handlers["callback_answer_call"](first)
+
+        second = _make_callback(user_id=1)
+        second.data = "answer:call123"
+        await handlers["callback_answer_call"](second)
+
+        assert client.answer_call.await_count == 2
+        assert "✅ Звонок принят." in second.message.edit_text.await_args.args[0]
+
     async def test_answer_call_domonap_error_preserves_card_context(self) -> None:
         client = MagicMock()
         client.answer_call = AsyncMock(side_effect=ApiError("boom"))
@@ -443,6 +459,22 @@ class TestAnswerAndEndCall:
         assert keyboard.inline_keyboard[0][0].callback_data == "noop"
         assert keyboard.inline_keyboard[1][0].callback_data == "answer:call123"
         assert keyboard.inline_keyboard[1][1].callback_data == "reject:call123"
+
+    async def test_open_door_failure_allows_retry(self) -> None:
+        client = MagicMock()
+        client.open_door = AsyncMock(side_effect=[False, True])
+        handlers = _build_callback_handlers(client)
+
+        first = _make_callback(user_id=1)
+        first.data = "open:door1"
+        await handlers["callback_open_door"](first)
+
+        second = _make_callback(user_id=1)
+        second.data = "open:door1"
+        await handlers["callback_open_door"](second)
+
+        assert client.open_door.await_count == 2
+        assert "✅ Дверь открыта." in second.message.edit_text.await_args.args[0]
 
     async def test_answer_and_reject_have_independent_cooldowns(self) -> None:
         client = MagicMock()

@@ -3,6 +3,8 @@ services:
     image: domonap-telegram-bot:local
     build: .
     env_file: ".env"
+    ports:
+      - "${CAMERA_PROXY_PORT:-8080}:${CAMERA_PROXY_PORT:-8080}"
     volumes:
       - "./data:/app/data"
       - "backups:/app/backups:ro"
