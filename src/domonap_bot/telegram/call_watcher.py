@@ -4,8 +4,9 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
@@ -32,6 +33,7 @@ _NOTIFICATION_MAX_ATTEMPTS = 3
 _NOTIFICATION_MAX_DELIVERY_ROUNDS = 3
 _NOTIFICATION_RETRY_BASE_DELAY = 0.5
 _NOTIFICATION_MAX_RETRY_AFTER = 5.0
+_DISPLAY_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 
 @dataclass
@@ -334,7 +336,10 @@ class CallWatcher:
             parts.append(f"🚪 {door.name}")
         elif address:
             parts.append(f"📍 {address}")
-        timestamp = call_time or datetime.now()
+        timestamp = call_time or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.astimezone(_DISPLAY_TIMEZONE)
         parts.append(f"🕘 {timestamp.strftime('%H:%M')}")
         return "\n".join(parts)
 

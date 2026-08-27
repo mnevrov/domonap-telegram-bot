@@ -272,7 +272,7 @@ class TestDeduplication:
     ) -> None:
         t = datetime(2024, 6, 15, 14, 30, 0, tzinfo=timezone.utc)
         text = watcher._build_message_text(call_time=t)
-        assert "🕘 14:30" in text
+        assert "🕘 17:30" in text
         assert "14:30:00" not in text
 
     async def test_message_text_door_takes_precedence(
