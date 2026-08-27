@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import logging
@@ -49,7 +50,7 @@ class YandexIdTokenVerifier:
         *,
         expected_client_id: str,
         allowed_user_ids: set[str],
-        cache_ttl_seconds: float = 300.0,
+        cache_ttl_seconds: float = 30.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         client_id = expected_client_id.strip()
@@ -155,6 +156,7 @@ class YandexSmartHomeService:
         self._dry_run = dry_run
         self._max_cached_requests = max_cached_requests
         self._request_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._action_lock = asyncio.Lock()
 
     @property
     def dry_run(self) -> bool:
@@ -246,6 +248,12 @@ class YandexSmartHomeService:
             self._request_cache.popitem(last=False)
 
     async def action(self, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        # Serialize action execution so concurrent delivery of the same X-Request-Id
+        # observes a completed cached response instead of racing the physical relay.
+        async with self._action_lock:
+            return await self._action_locked(request_id, payload)
+
+    async def _action_locked(self, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         cached = self._cached_action(request_id)
         if cached is not None:
             return cached
@@ -283,43 +291,52 @@ class YandexSmartHomeService:
                 "Only opening the active intercom call is supported",
             )
         else:
-            claimed = await self._active_calls.claim_openable()
-            if claimed is None:
-                result = self._device_error(
-                    device_id,
-                    "DEVICE_UNREACHABLE",
-                    "There is no single active live Domonap call",
-                )
-            else:
-                success = self._dry_run
-                if self._dry_run:
-                    logger.info(
-                        "Yandex Smart Home dry-run open accepted: call_id=%s door_id=%s",
-                        claimed.call_id,
-                        claimed.door_id,
-                    )
-                else:
-                    try:
-                        success = await self._opener.open_door(claimed.door_id)
-                    except Exception as exc:
-                        logger.warning(
-                            "Yandex Smart Home Domonap open failed: call_id=%s door_id=%s error=%s",
-                            claimed.call_id,
-                            claimed.door_id,
-                            type(exc).__name__,
-                        )
-                        success = False
-
-                if success:
-                    await self._active_calls.complete(claimed.call_id)
-                    result = {"id": device_id, "action_result": {"status": "DONE"}}
-                else:
-                    await self._active_calls.release(claimed.call_id)
-                    result = self._device_error(device_id, "DEVICE_UNREACHABLE")
+            result = await self._open_active_call(device_id)
 
         response = {"request_id": request_id, "payload": {"devices": [result]}}
         self._cache_action(request_id, response)
         return response
+
+    async def _open_active_call(self, device_id: str) -> dict[str, Any]:
+        claimed = await self._active_calls.claim_openable()
+        if claimed is None:
+            return self._device_error(
+                device_id,
+                "DEVICE_UNREACHABLE",
+                "There is no single active live Domonap call",
+            )
+
+        if self._dry_run:
+            logger.info(
+                "Yandex Smart Home dry-run open accepted: call_id=%s door_id=%s",
+                claimed.call_id,
+                claimed.door_id,
+            )
+            await self._active_calls.complete(claimed.call_id)
+            return {"id": device_id, "action_result": {"status": "DONE"}}
+
+        try:
+            success = await self._opener.open_door(claimed.door_id)
+        except Exception as exc:
+            # A failed HTTP exchange is ambiguous: the relay command might already
+            # have reached Domonap. Consume the call to prevent a second voice attempt.
+            await self._active_calls.complete(claimed.call_id)
+            logger.warning(
+                "Yandex Smart Home Domonap open ambiguous failure: "
+                "call_id=%s door_id=%s error=%s",
+                claimed.call_id,
+                claimed.door_id,
+                type(exc).__name__,
+            )
+            return self._device_error(device_id, "DEVICE_UNREACHABLE")
+
+        if success:
+            await self._active_calls.complete(claimed.call_id)
+            return {"id": device_id, "action_result": {"status": "DONE"}}
+
+        # An explicit negative result is safe to retry while the same live call remains valid.
+        await self._active_calls.release(claimed.call_id)
+        return self._device_error(device_id, "DEVICE_UNREACHABLE")
 
 
 class YandexSmartHomeServer:
