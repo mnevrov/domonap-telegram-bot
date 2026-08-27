@@ -135,6 +135,14 @@ class Settings(BaseSettings):
         if self.camera_link_ttl_seconds <= 0:
             raise ValueError("CAMERA_LINK_TTL_SECONDS must be positive")
 
+        yandex_features_enabled = (
+            self.yandex_announcements_enabled or self.yandex_smart_home_enabled
+        )
+        if yandex_features_enabled and not self.call_watcher_enabled:
+            raise ValueError(
+                "CALL_WATCHER_ENABLED must be true when Yandex Alice features are enabled"
+            )
+
         if self.yandex_announcements_enabled:
             token = (
                 self.yandex_iot_oauth_token.get_secret_value().strip()
