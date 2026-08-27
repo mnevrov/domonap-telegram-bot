@@ -174,7 +174,8 @@ class Settings(BaseSettings):
                 and self.yandex_smart_home_port == self.camera_proxy_port
             ):
                 raise ValueError(
-                    "YANDEX_SMART_HOME_PORT and CAMERA_PROXY_PORT must differ when both servers are enabled"
+                    "YANDEX_SMART_HOME_PORT and CAMERA_PROXY_PORT must differ "
+                    "when both servers are enabled"
                 )
         return self
 
