@@ -59,7 +59,11 @@ class YandexScenarioClient:
                 f"Yandex scenario returned invalid JSON (HTTP {response.status_code})"
             ) from exc
 
-        if not response.is_success or not isinstance(payload, dict) or payload.get("status") != "ok":
+        if (
+            not response.is_success
+            or not isinstance(payload, dict)
+            or payload.get("status") != "ok"
+        ):
             raise YandexScenarioError(f"Yandex scenario failed with HTTP {response.status_code}")
 
         request_id = payload.get("request_id")
