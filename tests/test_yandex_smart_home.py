@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from domonap_bot.yandex.active_call import ActiveCallRegistry
@@ -12,6 +14,25 @@ class FakeDoorOpener:
     async def open_door(self, door_id: str) -> bool:
         self.calls.append(door_id)
         return self.success
+
+
+class RaisingDoorOpener(FakeDoorOpener):
+    async def open_door(self, door_id: str) -> bool:
+        self.calls.append(door_id)
+        raise RuntimeError("ambiguous transport failure")
+
+
+class BlockingDoorOpener(FakeDoorOpener):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def open_door(self, door_id: str) -> bool:
+        self.calls.append(door_id)
+        self.started.set()
+        await self.release.wait()
+        return True
 
 
 def open_payload(device_id: str = "domonap-active-intercom") -> dict[str, object]:
@@ -74,7 +95,26 @@ async def test_duplicate_request_id_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_open_releases_claim_for_new_request() -> None:
+async def test_concurrent_duplicate_request_is_serialized_and_reuses_response() -> None:
+    opener = BlockingDoorOpener()
+    registry = ActiveCallRegistry()
+    await registry.start("call-1", "door-42")
+    service = YandexSmartHomeService(opener, registry, dry_run=False)
+
+    first_task = asyncio.create_task(service.action("req-1", open_payload()))
+    await asyncio.wait_for(opener.started.wait(), timeout=0.1)
+    duplicate_task = asyncio.create_task(service.action("req-1", open_payload()))
+    await asyncio.sleep(0)
+    opener.release.set()
+
+    first, duplicate = await asyncio.gather(first_task, duplicate_task)
+
+    assert duplicate == first
+    assert opener.calls == ["door-42"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_failed_open_releases_claim_for_new_request() -> None:
     opener = FakeDoorOpener(success=False)
     registry = ActiveCallRegistry()
     await registry.start("call-1", "door-42")
@@ -86,6 +126,21 @@ async def test_failed_open_releases_claim_for_new_request() -> None:
     assert first["payload"]["devices"][0]["action_result"]["status"] == "ERROR"
     assert second["payload"]["devices"][0]["action_result"]["status"] == "ERROR"
     assert opener.calls == ["door-42", "door-42"]
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_open_exception_consumes_call_and_prevents_retry() -> None:
+    opener = RaisingDoorOpener()
+    registry = ActiveCallRegistry()
+    await registry.start("call-1", "door-42")
+    service = YandexSmartHomeService(opener, registry, dry_run=False)
+
+    first = await service.action("req-1", open_payload())
+    second = await service.action("req-2", open_payload())
+
+    assert first["payload"]["devices"][0]["action_result"]["status"] == "ERROR"
+    assert second["payload"]["devices"][0]["action_result"]["status"] == "ERROR"
+    assert opener.calls == ["door-42"]
 
 
 @pytest.mark.asyncio
