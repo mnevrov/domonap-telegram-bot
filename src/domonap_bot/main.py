@@ -5,9 +5,10 @@ from collections.abc import Awaitable, Callable
 from aiogram import Bot
 
 from domonap_bot.config import Settings
-from domonap_bot.domonap.client import DomonapClient
+from domonap_bot.domonap.client import BASE_URL, DomonapClient
 from domonap_bot.domonap.compatibility import RuntimeCompatibilityMonitor
 from domonap_bot.domonap.models import AuthSession
+from domonap_bot.domonap.signalr import DomonapSignalRTransport
 from domonap_bot.health import (
     HeartbeatWatchdog,
     clear_heartbeat,
@@ -21,6 +22,16 @@ from domonap_bot.telegram.bot import build_bot
 from domonap_bot.telegram.call_watcher import CallWatcher
 from domonap_bot.telegram.commands import configure_bot_commands
 from domonap_bot.web.camera_proxy import CameraProxy, start_camera_proxy, stop_camera_proxy
+from domonap_bot.yandex.active_call import ActiveCallRegistry
+from domonap_bot.yandex.events import ObservedCallEventSource, YandexCallObserver
+from domonap_bot.yandex.scenario import YandexScenarioAnnouncer, YandexScenarioClient
+from domonap_bot.yandex.smart_home import (
+    YandexIdTokenVerifier,
+    YandexSmartHomeServer,
+    YandexSmartHomeService,
+    start_yandex_smart_home,
+    stop_yandex_smart_home,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +137,9 @@ async def main() -> None:
     compatibility_monitor: RuntimeCompatibilityMonitor | None = None
     camera_proxy: CameraProxy | None = None
     camera_proxy_runner = None
+    yandex_scenario_client: YandexScenarioClient | None = None
+    yandex_smart_home_server: YandexSmartHomeServer | None = None
+    yandex_smart_home_runner = None
     persistence_tasks: set[asyncio.Task[None]] = set()
 
     try:
@@ -196,14 +210,78 @@ async def main() -> None:
         )
         await configure_bot_commands(bot)
 
+        yandex_features_enabled = (
+            settings.yandex_announcements_enabled or settings.yandex_smart_home_enabled
+        )
+        active_calls: ActiveCallRegistry | None = None
+        observed_event_source: ObservedCallEventSource | None = None
+
+        if yandex_features_enabled:
+            active_calls = ActiveCallRegistry(
+                ttl_seconds=float(settings.yandex_active_call_ttl_seconds)
+            )
+            announcer: YandexScenarioAnnouncer | None = None
+
+            if settings.yandex_announcements_enabled:
+                yandex_token = (
+                    settings.yandex_iot_oauth_token.get_secret_value().strip()
+                    if settings.yandex_iot_oauth_token is not None
+                    else ""
+                )
+                yandex_scenario_client = YandexScenarioClient(yandex_token)
+                announcer = YandexScenarioAnnouncer(
+                    yandex_scenario_client,
+                    settings.yandex_scenario_map,
+                )
+                logger.info(
+                    "Yandex Station announcements enabled for %s mapped door(s)",
+                    len(settings.yandex_scenario_map),
+                )
+
+            signalr_source = DomonapSignalRTransport(
+                base_url=BASE_URL,
+                token_provider=lambda: client.access_token,
+                refresh_callback=client.refresh_session,
+                instance_id=client.instance_id,
+            )
+            observed_event_source = ObservedCallEventSource(
+                signalr_source,
+                YandexCallObserver(active_calls, announcer),
+            )
+
         watcher = CallWatcher(
             client,
             bot,
             settings,
+            event_source=observed_event_source,
             access=access,
             camera_url_provider=camera_proxy.url_for if camera_proxy else None,
         )
         await watcher.start()
+
+        if settings.yandex_smart_home_enabled:
+            if active_calls is None:
+                raise RuntimeError("Yandex Smart Home requires an active-call registry")
+            verifier = YandexIdTokenVerifier(
+                expected_client_id=settings.yandex_id_oauth_client_id,
+                allowed_user_ids=set(settings.yandex_allowed_user_ids),
+            )
+            service = YandexSmartHomeService(
+                client,
+                active_calls,
+                dry_run=settings.yandex_smart_home_dry_run,
+            )
+            yandex_smart_home_server = YandexSmartHomeServer(service, verifier)
+            yandex_smart_home_runner = await start_yandex_smart_home(
+                yandex_smart_home_server,
+                "0.0.0.0",
+                settings.yandex_smart_home_port,
+            )
+            logger.info(
+                "Yandex Smart Home provider listening on port %s (dry_run=%s)",
+                settings.yandex_smart_home_port,
+                settings.yandex_smart_home_dry_run,
+            )
 
         def runtime_is_healthy() -> bool:
             if not settings.call_watcher_enabled:
@@ -222,8 +300,18 @@ async def main() -> None:
             watchdog.stop()
         await _cancel_task(heartbeat_task)
         clear_heartbeat()
+        if yandex_smart_home_runner is not None and yandex_smart_home_server is not None:
+            await _bounded_close(
+                "Yandex Smart Home provider",
+                lambda: stop_yandex_smart_home(
+                    yandex_smart_home_runner,
+                    yandex_smart_home_server,
+                ),
+            )
         if watcher is not None:
             await _bounded_close("call watcher", watcher.stop)
+        if yandex_scenario_client is not None:
+            await _bounded_close("Yandex scenario client", yandex_scenario_client.close)
         if camera_proxy_runner is not None:
             await _bounded_close("camera proxy", lambda: stop_camera_proxy(camera_proxy_runner))
         if bot is not None:
