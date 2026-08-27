@@ -54,6 +54,7 @@ class DomonapSignalRTransport:
         refresh_callback: RefreshCallback,
         dom_app: str = "mobile;",
         dom_platform: str = "Android;",
+        instance_id: str = "",
         keepalive_interval: float = _DEFAULT_KEEPALIVE_INTERVAL,
         server_timeout: float = _DEFAULT_SERVER_TIMEOUT,
         max_reconnect_delay: float = _DEFAULT_MAX_RECONNECT_DELAY,
@@ -64,6 +65,7 @@ class DomonapSignalRTransport:
         self._refresh_callback = refresh_callback
         self._dom_app = dom_app
         self._dom_platform = dom_platform
+        self._instance_id = instance_id
         self._keepalive_interval = keepalive_interval
         self._server_timeout = server_timeout
         self._max_reconnect_delay = max_reconnect_delay
@@ -211,6 +213,7 @@ class DomonapSignalRTransport:
             "User-Agent": SIGNALR_USER_AGENT,
             "dom-app": self._dom_app,
             "dom-platform": self._dom_platform,
+            "instanceId": self._instance_id,
             "Authorization": f"Bearer {access_token}",
         }
 

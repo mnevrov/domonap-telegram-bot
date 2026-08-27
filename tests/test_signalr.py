@@ -94,6 +94,7 @@ async def test_websocket_transport_uses_signalr_protocol_and_affinity_cookie() -
         base_url=str(server.make_url("/")).rstrip("/"),
         token_provider=lambda: "access-1",
         refresh_callback=AsyncBoolCallback(False),
+        instance_id="instance-1;",
         keepalive_interval=0.01,
         server_timeout=1.0,
         session_factory=_unsafe_session_factory,
@@ -112,8 +113,8 @@ async def test_websocket_transport_uses_signalr_protocol_and_affinity_cookie() -
     assert payload.raw["EventMessage"] == "DomofonCalling"
     assert observed["negotiate_user_agent"] == SIGNALR_USER_AGENT
     assert observed["ws_user_agent"] == SIGNALR_USER_AGENT
-    assert observed["negotiate_instance_id"] == ""
-    assert observed["ws_instance_id"] == ""
+    assert observed["negotiate_instance_id"] == "instance-1;"
+    assert observed["ws_instance_id"] == "instance-1;"
     assert observed["negotiate_authorization"] == "Bearer access-1"
     assert observed["ws_authorization"] == "Bearer access-1"
     assert "domonap-api-communication-affinity=backend-a" in observed["ws_cookie"]

@@ -73,6 +73,7 @@ class CallWatcher:
                 base_url=BASE_URL,
                 token_provider=lambda: self._client.access_token,
                 refresh_callback=self._client.refresh_session,
+                instance_id=self._client.instance_id,
             )
         else:
             self._event_source = event_source
