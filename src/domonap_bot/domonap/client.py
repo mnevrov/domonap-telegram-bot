@@ -196,6 +196,9 @@ class DomonapClient:
         if session.instance_id and not self._instance_id_explicit:
             self._instance_id = session.instance_id
             self._http.headers["instanceId"] = _with_suffix(session.instance_id)
+        if self._register_device_token:
+            await self._update_device_token()
+            logger.info("Domonap device token registered for restored session")
         return True
 
     def _now_utc(self) -> datetime:

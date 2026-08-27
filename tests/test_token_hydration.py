@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 from domonap_bot.domonap.client import DomonapClient
@@ -50,6 +52,23 @@ async def test_hydrate_from_storage_keeps_configured_phone(storage: FakeStorage)
     await client.hydrate_from_storage()
 
     assert client.phone == "+70009998877"
+
+
+async def test_hydrate_from_storage_registers_device_token_when_enabled(
+    storage: FakeStorage,
+) -> None:
+    token_storage = TokenStorage(storage)
+    await token_storage.save(AuthSession(access_token="a", phone="+79991234567"))
+
+    client = DomonapClient(
+        token_storage=TokenStorage(storage),
+        register_device_token=True,
+    )
+    client._update_device_token = AsyncMock()
+
+    assert await client.hydrate_from_storage() is True
+
+    client._update_device_token.assert_awaited_once()
 
 
 async def test_hydrate_from_storage_no_saved_session(storage: FakeStorage) -> None:
