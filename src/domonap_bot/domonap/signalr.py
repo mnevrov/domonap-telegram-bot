@@ -279,9 +279,15 @@ class DomonapSignalRTransport:
             if call_id:
                 if door_id is None:
                     door_id = self._active_calls.get(call_id)
-                self._active_calls.pop(call_id, None)
+            self._active_calls.pop(call_id, None)
             logger.debug("Domonap call ended")
-            return None
+            try:
+                payload = IncomingCallPayload.model_validate(push_data)
+            except ValidationError:
+                logger.warning("Invalid Domonap call-ended push schema")
+                return None
+            payload.raw = dict(push_data)
+            return payload
 
         if event_message != "DomofonCalling":
             return None

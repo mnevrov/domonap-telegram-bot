@@ -29,6 +29,7 @@ from domonap_bot.storage.tokens import TokenStorage
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.domonap.ru"
+_MAX_MEDIA_BYTES = 10 * 1024 * 1024
 DEFAULT_USER_AGENT = "okhttp/5.3.2"
 DEFAULT_DEVICE_PLATFORM = "Android"
 DEFAULT_DOM_APP = "mobile"
@@ -138,6 +139,13 @@ class DomonapClient:
 
     async def close(self) -> None:
         await self._http.aclose()
+
+    async def download_media(self, url: str) -> bytes:
+        response = await self._http.get(url)
+        response.raise_for_status()
+        if len(response.content) > _MAX_MEDIA_BYTES:
+            raise ValueError("Domonap media response is too large")
+        return response.content
 
     async def __aenter__(self) -> "DomonapClient":
         return self

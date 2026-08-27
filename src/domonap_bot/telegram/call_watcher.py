@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.client import BASE_URL, DomonapClient
@@ -18,6 +18,7 @@ from domonap_bot.domonap.signalr import DomonapSignalRTransport
 from domonap_bot.telegram.access import AccessControl
 from domonap_bot.telegram.callback_utils import compact_callback_id
 from domonap_bot.telegram.keyboards import CameraUrlProvider
+from domonap_bot.telegram.ui.renderer import edit_markup
 from domonap_bot.telegram.url_policy import safe_http_url
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class CallWatcher:
         self._seen_ids: set[str] = set()
         self._seen_order: deque[str] = deque()
         self._pending_deliveries: OrderedDict[str, _PendingDelivery] = OrderedDict()
+        self._active_notifications: dict[str, dict[int, Any]] = {}
         self._door_map: dict[str, DoorKey] = {}
         self._door_map_loaded_at = 0.0
         self._last_polled_call_id: str | None = None
@@ -227,6 +229,9 @@ class CallWatcher:
             )
 
     async def _handle_payload(self, payload: IncomingCallPayload) -> None:
+        if payload.event_message == "DomofonCallEnded":
+            await self._close_notification(payload.call_id)
+            return
         if payload.call_id in self._seen_ids:
             return
 
@@ -432,16 +437,26 @@ class CallWatcher:
         kb = self._build_keyboard(door_id=door_id, video_url=video_url, call_id=call_id)
         safe_photo_url = safe_http_url(photo_url)
         failed_user_ids: set[int] = set()
+        photo_bytes: bytes | None = None
+        if safe_photo_url:
+            try:
+                photo_bytes = await self._client.download_media(safe_photo_url)
+                logger.info("Call photo downloaded: call_id=%s bytes=%s", call_id, len(photo_bytes))
+            except Exception as exc:
+                logger.warning("Failed to download call photo: %s", exc)
 
         for uid in user_ids:
-            if safe_photo_url:
+            sent_message: Any = None
+            if photo_bytes is not None:
                 async def send_photo() -> Any:
-                    return await self._bot.send_photo(
+                    nonlocal sent_message
+                    sent_message = await self._bot.send_photo(
                         chat_id=uid,
-                        photo=safe_photo_url,
+                        photo=BufferedInputFile(photo_bytes, filename="domonap-call.jpg"),
                         caption=text,
                         reply_markup=kb,
                     )
+                    return sent_message
 
                 photo_sent = await self._send_with_retry(
                     send_photo,
@@ -449,6 +464,8 @@ class CallWatcher:
                     kind="photo",
                 )
                 if photo_sent:
+                    if call_id and sent_message is not None:
+                        self._active_notifications.setdefault(call_id, {})[uid] = sent_message
                     continue
                 logger.warning(
                     "Falling back to text notification for user %s after photo delivery failed",
@@ -456,11 +473,13 @@ class CallWatcher:
                 )
 
             async def send_text() -> Any:
-                return await self._bot.send_message(
+                nonlocal sent_message
+                sent_message = await self._bot.send_message(
                     chat_id=uid,
                     text=text,
                     reply_markup=kb,
                 )
+                return sent_message
 
             text_sent = await self._send_with_retry(
                 send_text,
@@ -469,8 +488,19 @@ class CallWatcher:
             )
             if not text_sent:
                 failed_user_ids.add(uid)
+            elif call_id and sent_message is not None:
+                self._active_notifications.setdefault(call_id, {})[uid] = sent_message
 
         return failed_user_ids
+
+    async def _close_notification(self, call_id: str) -> None:
+        notifications = self._active_notifications.pop(call_id, {})
+        for message in notifications.values():
+            try:
+                await edit_markup(message, None)
+            except Exception as exc:
+                logger.warning("Failed to close call notification %s: %s", call_id, exc)
+        logger.info("Call notification closed: call_id=%s messages=%s", call_id, len(notifications))
 
     def get_seen_ids_count(self) -> int:
         return len(self._seen_ids)

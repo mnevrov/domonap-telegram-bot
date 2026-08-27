@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.types import BufferedInputFile
 
 from domonap_bot.config import Settings
 from domonap_bot.domonap.models import CallLogEntry, DoorKey, IncomingCallPayload
@@ -41,6 +42,7 @@ def client() -> MagicMock:
     c = MagicMock()
     c.get_call_logs = AsyncMock(return_value=[])
     c.get_doors = AsyncMock(return_value=[])
+    c.download_media = AsyncMock(return_value=b"photo-data")
     c.refresh_session = AsyncMock(return_value=True)
     return c
 
@@ -160,6 +162,35 @@ class TestDeduplication:
 
         assert bot.send_photo.await_count == 2
         bot.send_message.assert_not_awaited()
+
+    async def test_photo_is_downloaded_before_telegram_upload(
+        self, bot: MagicMock, settings: Settings,
+    ) -> None:
+        client = MagicMock()
+        client.get_doors = AsyncMock(return_value=[])
+        client.download_media = AsyncMock(return_value=b"jpeg-data")
+        watcher = CallWatcher(client, bot, settings)
+
+        await watcher._handle_payload(
+            IncomingCallPayload(CallId="photo-call", PhotoUrl="https://example.com/photo.jpg")
+        )
+
+        uploaded = bot.send_photo.call_args.kwargs["photo"]
+        assert isinstance(uploaded, BufferedInputFile)
+        assert uploaded.data == b"jpeg-data"
+        client.download_media.assert_awaited_once_with("https://example.com/photo.jpg")
+
+    async def test_call_end_removes_actions_from_notification(
+        self, watcher: CallWatcher, bot: MagicMock,
+    ) -> None:
+        await watcher._handle_payload(IncomingCallPayload(CallId="ended-call"))
+
+        await watcher._handle_payload(
+            IncomingCallPayload(CallId="ended-call", EventMessage="DomofonCallEnded")
+        )
+
+        assert bot.send_message.return_value.edit_reply_markup.await_count == 2
+        bot.send_message.return_value.edit_reply_markup.assert_any_await(reply_markup=None)
 
     async def test_keyboard_with_door_id(
         self, watcher: CallWatcher,

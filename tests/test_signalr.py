@@ -280,7 +280,8 @@ def test_call_ended_clears_active_call_mapping() -> None:
     ended = transport._handle_record(
         _push_record(event="DomofonCallEnded", call_id="call-1", door_id=None)
     )
-    assert ended is None
+    assert ended is not None
+    assert ended.event_message == "DomofonCallEnded"
     assert transport._active_calls == {}
 
 

@@ -75,6 +75,7 @@ class CallLogPage(BaseModel):
 
 
 class IncomingCallPayload(BaseModel):
+    event_message: str | None = Field(default=None, alias="EventMessage")
     call_id: str = Field(alias="CallId")
     door_id: str | None = Field(default=None, alias="DoorId")
     video_preview: str | None = Field(default=None, alias="VideoPreview")
