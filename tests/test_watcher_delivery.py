@@ -15,6 +15,7 @@ from domonap_bot.telegram.call_watcher import CallWatcher
 def _watcher(bot: MagicMock) -> CallWatcher:
     client = MagicMock()
     client.refresh_session = AsyncMock(return_value=True)
+    client.download_media = AsyncMock(return_value=b"photo-bytes")
     settings = Settings(
         telegram_bot_token="test:token",
         allowed_telegram_user_ids=[1, 2],
