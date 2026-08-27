@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -72,6 +73,20 @@ class TestDeduplication:
         await watcher._handle_entry(entry)
         assert watcher.get_seen_ids_count() == 1
         bot.send_message.assert_not_awaited()
+
+    async def test_incoming_call_logs_reception_and_delivery(
+        self, watcher: CallWatcher, bot: MagicMock, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        payload = IncomingCallPayload(CallId="call-log", DoorId="door-log")
+
+        with caplog.at_level(logging.INFO):
+            await watcher._handle_payload(payload)
+
+        assert "Incoming Domonap call received: call_id=call-log door_id=door-log" in caplog.text
+        assert (
+            "Call notification delivery completed: call_id=call-log recipients=2 failed=0"
+            in caplog.text
+        )
 
     async def test_multiple_unique_call_ids_all_sent(
         self, watcher: CallWatcher, bot: MagicMock,
@@ -306,3 +321,18 @@ class TestSignalRRetry:
         await asyncio.wait_for(watcher.stop(), timeout=2.0)
 
         assert source.closed is True
+
+    async def test_polling_logs_newest_call_id(
+        self, bot: MagicMock, settings: Settings, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client = MagicMock()
+        client.get_call_logs = AsyncMock(
+            return_value=[CallLogEntry(call_id="polled-call", answered=False)]
+        )
+        client.get_doors = AsyncMock(return_value=[])
+        watcher = CallWatcher(client, bot, settings, event_source=FailingEventSource())
+
+        with caplog.at_level(logging.INFO):
+            await watcher._poll_loop(max_duration=0)
+
+        assert "Call-log poll returned entries=1 newest_call_id=polled-call" in caplog.text

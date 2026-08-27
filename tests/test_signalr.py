@@ -121,6 +121,52 @@ async def test_websocket_transport_uses_signalr_protocol_and_affinity_cookie() -
     assert observed["keepalive"] == '{"type":6}\x1e'
 
 
+async def test_websocket_connection_logs_safe_runtime_evidence(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def negotiate(request: web.Request) -> web.Response:
+        return web.json_response({"connectionToken": "connection-log"})
+
+    async def websocket(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive_str()
+        await ws.send_str(_push_record(call_id="call-log", door_id="door-log") + "\x1e")
+        await asyncio.sleep(0.05)
+        await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_post("/notificationHub/negotiate", negotiate)
+    app.router.add_get("/notificationHub", websocket)
+    server = await _start_server(app)
+    transport = DomonapSignalRTransport(
+        base_url=str(server.make_url("/")).rstrip("/"),
+        token_provider=lambda: "secret-token",
+        refresh_callback=AsyncBoolCallback(False),
+        server_timeout=1.0,
+        session_factory=_unsafe_session_factory,
+    )
+
+    try:
+        with caplog.at_level(logging.INFO):
+            listener = transport.listen_once()
+            payload = await asyncio.wait_for(anext(listener), timeout=2.0)
+            await listener.aclose()
+    finally:
+        await transport.close()
+        await server.close()
+
+    assert payload.call_id == "call-log"
+    assert "SignalR negotiate succeeded" in caplog.text
+    assert "SignalR WebSocket connected" in caplog.text
+    assert (
+        "SignalR ReceivePush event=DomofonCalling call_id=call-log door_id=door-log"
+        in caplog.text
+    )
+    assert "secret-token" not in caplog.text
+
+
 class AsyncBoolCallback:
     def __init__(self, result: bool, on_call: Callable[[], None] | None = None) -> None:
         self.result = result
@@ -284,3 +330,19 @@ def test_invalid_push_log_does_not_include_raw_payload(
     assert result is None
     assert "Invalid Domonap incoming-call push schema" in caplog.text
     assert secret_marker not in caplog.text
+
+
+def test_unknown_push_event_logs_safe_event_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = DomonapSignalRTransport(
+        base_url="https://api.domonap.ru",
+        token_provider=lambda: "access",
+        refresh_callback=AsyncBoolCallback(False),
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = transport._handle_record(_push_record(event="NewEvent", call_id="call-2"))
+
+    assert result is None
+    assert "SignalR ReceivePush event=NewEvent call_id=call-2 door_id=door-1" in caplog.text

@@ -67,6 +67,7 @@ class CallWatcher:
         self._pending_deliveries: OrderedDict[str, _PendingDelivery] = OrderedDict()
         self._door_map: dict[str, DoorKey] = {}
         self._door_map_loaded_at = 0.0
+        self._last_polled_call_id: str | None = None
         if event_source is None:
             self._event_source: CallEventSource = DomonapSignalRTransport(
                 base_url=BASE_URL,
@@ -129,6 +130,14 @@ class CallWatcher:
             try:
                 await self._ensure_door_map_fresh()
                 logs = await self._client.get_call_logs(per_page=10, missed_calls=False)
+                newest_call_id = logs[0].call_id if logs else None
+                if newest_call_id != self._last_polled_call_id:
+                    logger.info(
+                        "Call-log poll returned entries=%s newest_call_id=%s",
+                        len(logs),
+                        newest_call_id or "<none>",
+                    )
+                    self._last_polled_call_id = newest_call_id
                 for entry in logs:
                     await self._handle_entry(entry)
             except asyncio.CancelledError:
@@ -220,6 +229,12 @@ class CallWatcher:
         if payload.call_id in self._seen_ids:
             return
 
+        logger.info(
+            "Incoming Domonap call received: call_id=%s door_id=%s",
+            payload.call_id,
+            payload.door_id or "<missing>",
+        )
+
         user_ids = self._delivery_recipient_ids(payload.call_id)
         if not user_ids:
             self._record_delivery_result(payload.call_id, set())
@@ -247,10 +262,22 @@ class CallWatcher:
             call_id=payload.call_id,
         )
         self._record_delivery_result(payload.call_id, failed_user_ids)
+        logger.info(
+            "Call notification delivery completed: call_id=%s recipients=%s failed=%s",
+            payload.call_id,
+            len(user_ids),
+            len(failed_user_ids),
+        )
 
     async def _handle_entry(self, entry: CallLogEntry) -> None:
         if entry.call_id in self._seen_ids:
             return
+
+        logger.info(
+            "Incoming Domonap call-log entry: call_id=%s door_id=%s",
+            entry.call_id,
+            entry.door_id or "<missing>",
+        )
 
         user_ids = self._delivery_recipient_ids(entry.call_id)
         if not user_ids:
@@ -274,6 +301,12 @@ class CallWatcher:
             call_id=entry.call_id,
         )
         self._record_delivery_result(entry.call_id, failed_user_ids)
+        logger.info(
+            "Call notification delivery completed: call_id=%s recipients=%s failed=%s",
+            entry.call_id,
+            len(user_ids),
+            len(failed_user_ids),
+        )
 
     def _add_seen(self, call_id: str) -> None:
         if call_id in self._seen_ids:

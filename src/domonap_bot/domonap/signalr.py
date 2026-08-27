@@ -137,6 +137,7 @@ class DomonapSignalRTransport:
             ) as ws:
                 self._ws = ws
                 self._reconnect_delay = 1.0
+                logger.info("SignalR WebSocket connected")
                 await ws.send_str(_SIGNALR_HANDSHAKE)
                 keepalive_task = asyncio.create_task(self._keepalive(ws))
 
@@ -200,6 +201,7 @@ class DomonapSignalRTransport:
                 connection_token = data.get("connectionToken")
                 if not isinstance(connection_token, str) or not connection_token:
                     raise SignalRConnectionError("Missing connectionToken in negotiate response")
+                logger.info("SignalR negotiate succeeded")
                 return connection_token
 
         raise SignalRAuthenticationError("SignalR authentication failed")
@@ -254,15 +256,23 @@ class DomonapSignalRTransport:
 
         raw_args = data.get("arguments")
         if not isinstance(raw_args, list) or len(raw_args) < 3:
+            logger.warning("SignalR ReceivePush has malformed arguments")
             return None
         push_data = raw_args[2]
         if not isinstance(push_data, dict):
+            logger.warning("SignalR ReceivePush has malformed payload")
             return None
 
         event_message = push_data.get("EventMessage")
         call_id = str(push_data.get("CallId") or "")
+        door_id = push_data.get("DoorId")
+        logger.info(
+            "SignalR ReceivePush event=%s call_id=%s door_id=%s",
+            event_message or "<missing>",
+            call_id or "<missing>",
+            door_id or "<missing>",
+        )
         if event_message == "DomofonCallEnded":
-            door_id = push_data.get("DoorId")
             if call_id:
                 if door_id is None:
                     door_id = self._active_calls.get(call_id)
