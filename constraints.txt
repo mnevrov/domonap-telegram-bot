@@ -39,7 +39,7 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 python-dotenv==1.2.3
 respx==0.23.1
-ruff==0.16.4
+ruff==0.16.5
 typing-extensions==4.16.0
 typing-inspection==0.4.4
 yarl==1.24.5
